@@ -1,0 +1,331 @@
+{
+  "summary": {
+    "static_rate": {
+      "contained": 1,
+      "attacks": 3,
+      "collateral": 1
+    },
+    "static_both": {
+      "contained": 3,
+      "attacks": 3,
+      "collateral": 1
+    },
+    "trigger_rule": {
+      "contained": 3,
+      "attacks": 3,
+      "collateral": 1
+    },
+    "shap_top1": {
+      "contained": 3,
+      "attacks": 3,
+      "collateral": 1
+    },
+    "shap_group": {
+      "contained": 3,
+      "attacks": 3,
+      "collateral": 1
+    }
+  },
+  "rows": [
+    {
+      "policy": "static_rate",
+      "scenario": "benign_browsing",
+      "is_attack": false,
+      "score": 0.05,
+      "action": "forward",
+      "mechanism": "limit_req",
+      "driver_group": "rate",
+      "contained": true,
+      "why": "rate limit applied to a high-rate attack",
+      "collateral": false
+    },
+    {
+      "policy": "static_rate",
+      "scenario": "benign_flash_crowd",
+      "is_attack": false,
+      "score": 0.38,
+      "action": "throttle",
+      "mechanism": "limit_req",
+      "driver_group": "rate",
+      "contained": true,
+      "why": "rate limit applied to a high-rate attack",
+      "collateral": true
+    },
+    {
+      "policy": "static_rate",
+      "scenario": "slowloris",
+      "is_attack": true,
+      "score": 0.91,
+      "action": "quarantine",
+      "mechanism": "limit_req",
+      "driver_group": "rate",
+      "contained": false,
+      "why": "rate limit applied to a slow attack \u2014 it will never trip the threshold",
+      "collateral": false
+    },
+    {
+      "policy": "static_rate",
+      "scenario": "rudy",
+      "is_attack": true,
+      "score": 0.88,
+      "action": "quarantine",
+      "mechanism": "limit_req",
+      "driver_group": "rate",
+      "contained": false,
+      "why": "rate limit applied to a slow attack \u2014 it will never trip the threshold",
+      "collateral": false
+    },
+    {
+      "policy": "static_rate",
+      "scenario": "flood",
+      "is_attack": true,
+      "score": 0.94,
+      "action": "quarantine",
+      "mechanism": "limit_req",
+      "driver_group": "rate",
+      "contained": true,
+      "why": "rate limit applied to a high-rate attack",
+      "collateral": false
+    },
+    {
+      "policy": "static_both",
+      "scenario": "benign_browsing",
+      "is_attack": false,
+      "score": 0.05,
+      "action": "forward",
+      "mechanism": "limit_req+limit_conn",
+      "driver_group": "static",
+      "contained": true,
+      "why": "both limits applied to a multi-vector attack",
+      "collateral": false
+    },
+    {
+      "policy": "static_both",
+      "scenario": "benign_flash_crowd",
+      "is_attack": false,
+      "score": 0.38,
+      "action": "throttle",
+      "mechanism": "limit_req+limit_conn",
+      "driver_group": "static",
+      "contained": true,
+      "why": "both limits applied to a multi-vector attack",
+      "collateral": true
+    },
+    {
+      "policy": "static_both",
+      "scenario": "slowloris",
+      "is_attack": true,
+      "score": 0.91,
+      "action": "quarantine",
+      "mechanism": "limit_req+limit_conn",
+      "driver_group": "static",
+      "contained": true,
+      "why": "both limits applied to a multi-vector attack",
+      "collateral": false
+    },
+    {
+      "policy": "static_both",
+      "scenario": "rudy",
+      "is_attack": true,
+      "score": 0.88,
+      "action": "quarantine",
+      "mechanism": "limit_req+limit_conn",
+      "driver_group": "static",
+      "contained": true,
+      "why": "both limits applied to a multi-vector attack",
+      "collateral": false
+    },
+    {
+      "policy": "static_both",
+      "scenario": "flood",
+      "is_attack": true,
+      "score": 0.94,
+      "action": "quarantine",
+      "mechanism": "limit_req+limit_conn",
+      "driver_group": "static",
+      "contained": true,
+      "why": "both limits applied to a multi-vector attack",
+      "collateral": false
+    },
+    {
+      "policy": "trigger_rule",
+      "scenario": "benign_browsing",
+      "is_attack": false,
+      "score": 0.05,
+      "action": "forward",
+      "mechanism": "limit_req+limit_conn",
+      "driver_group": "unclear",
+      "contained": true,
+      "why": "both limits applied to a multi-vector attack",
+      "collateral": false
+    },
+    {
+      "policy": "trigger_rule",
+      "scenario": "benign_flash_crowd",
+      "is_attack": false,
+      "score": 0.38,
+      "action": "throttle",
+      "mechanism": "limit_req",
+      "driver_group": "rate",
+      "contained": true,
+      "why": "rate limit applied to a high-rate attack",
+      "collateral": true
+    },
+    {
+      "policy": "trigger_rule",
+      "scenario": "slowloris",
+      "is_attack": true,
+      "score": 0.91,
+      "action": "quarantine",
+      "mechanism": "limit_conn+timeout",
+      "driver_group": "stall",
+      "contained": true,
+      "why": "limit_conn + timeout applied to a connection-holding attack",
+      "collateral": false
+    },
+    {
+      "policy": "trigger_rule",
+      "scenario": "rudy",
+      "is_attack": true,
+      "score": 0.88,
+      "action": "quarantine",
+      "mechanism": "limit_conn+timeout",
+      "driver_group": "stall",
+      "contained": true,
+      "why": "limit_conn + timeout applied to a connection-holding attack",
+      "collateral": false
+    },
+    {
+      "policy": "trigger_rule",
+      "scenario": "flood",
+      "is_attack": true,
+      "score": 0.94,
+      "action": "quarantine",
+      "mechanism": "limit_req",
+      "driver_group": "rate",
+      "contained": true,
+      "why": "rate limit applied to a high-rate attack",
+      "collateral": false
+    },
+    {
+      "policy": "shap_top1",
+      "scenario": "benign_browsing",
+      "is_attack": false,
+      "score": 0.05,
+      "action": "forward",
+      "mechanism": "limit_req+limit_conn",
+      "driver_group": "unclear",
+      "contained": true,
+      "why": "both limits applied to a multi-vector attack",
+      "collateral": false
+    },
+    {
+      "policy": "shap_top1",
+      "scenario": "benign_flash_crowd",
+      "is_attack": false,
+      "score": 0.38,
+      "action": "throttle",
+      "mechanism": "limit_req",
+      "driver_group": "rate",
+      "contained": true,
+      "why": "rate limit applied to a high-rate attack",
+      "collateral": true
+    },
+    {
+      "policy": "shap_top1",
+      "scenario": "slowloris",
+      "is_attack": true,
+      "score": 0.91,
+      "action": "quarantine",
+      "mechanism": "limit_conn+timeout",
+      "driver_group": "stall",
+      "contained": true,
+      "why": "limit_conn + timeout applied to a connection-holding attack",
+      "collateral": false
+    },
+    {
+      "policy": "shap_top1",
+      "scenario": "rudy",
+      "is_attack": true,
+      "score": 0.88,
+      "action": "quarantine",
+      "mechanism": "limit_conn+timeout",
+      "driver_group": "stall",
+      "contained": true,
+      "why": "limit_conn + timeout applied to a connection-holding attack",
+      "collateral": false
+    },
+    {
+      "policy": "shap_top1",
+      "scenario": "flood",
+      "is_attack": true,
+      "score": 0.94,
+      "action": "quarantine",
+      "mechanism": "limit_req",
+      "driver_group": "rate",
+      "contained": true,
+      "why": "rate limit applied to a high-rate attack",
+      "collateral": false
+    },
+    {
+      "policy": "shap_group",
+      "scenario": "benign_browsing",
+      "is_attack": false,
+      "score": 0.05,
+      "action": "forward",
+      "mechanism": "limit_req",
+      "driver_group": "rate",
+      "contained": true,
+      "why": "rate limit applied to a high-rate attack",
+      "collateral": false
+    },
+    {
+      "policy": "shap_group",
+      "scenario": "benign_flash_crowd",
+      "is_attack": false,
+      "score": 0.38,
+      "action": "throttle",
+      "mechanism": "limit_req",
+      "driver_group": "rate",
+      "contained": true,
+      "why": "rate limit applied to a high-rate attack",
+      "collateral": true
+    },
+    {
+      "policy": "shap_group",
+      "scenario": "slowloris",
+      "is_attack": true,
+      "score": 0.91,
+      "action": "quarantine",
+      "mechanism": "limit_conn+timeout",
+      "driver_group": "stall",
+      "contained": true,
+      "why": "limit_conn + timeout applied to a connection-holding attack",
+      "collateral": false
+    },
+    {
+      "policy": "shap_group",
+      "scenario": "rudy",
+      "is_attack": true,
+      "score": 0.88,
+      "action": "quarantine",
+      "mechanism": "limit_conn+timeout",
+      "driver_group": "stall",
+      "contained": true,
+      "why": "limit_conn + timeout applied to a connection-holding attack",
+      "collateral": false
+    },
+    {
+      "policy": "shap_group",
+      "scenario": "flood",
+      "is_attack": true,
+      "score": 0.94,
+      "action": "quarantine",
+      "mechanism": "limit_req",
+      "driver_group": "rate",
+      "contained": true,
+      "why": "rate limit applied to a high-rate attack",
+      "collateral": false
+    }
+  ]
+}

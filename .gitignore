@@ -1,0 +1,19 @@
+# Data
+data/
+captures/
+logs/
+*.pcap
+*.csv
+*.parquet
+
+# Environment
+.venv/
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.idea/
+
+# Misc
+get-docker.sh
