@@ -1,0 +1,44 @@
+services:
+  proxy:
+    image: nginx:1.25-alpine
+    container_name: proxy
+    volumes:
+      - ./proxy/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./proxy/limits:/etc/nginx/limits:ro
+      - ./captures:/captures
+      - ./logs:/var/log/nginx
+    ports: ["8080:80"]
+    networks: [lab]
+
+  backend:
+    image: nginx:1.25-alpine
+    container_name: backend
+    networks: [lab]
+
+  sandbox-backend:
+    image: nginx:1.25-alpine
+    container_name: sandbox_backend
+    networks: [lab]
+
+  legit-loadgen:
+    build: ./gen
+    container_name: legit_loadgen
+    networks: [lab]
+
+  slow-gen:
+    build: ./gen
+    container_name: slow_gen
+    networks: [lab]
+
+  flood-gen:
+    build: ./gen
+    container_name: flood_gen
+    networks: [lab]
+
+  redis:
+    image: redis:7-alpine
+    networks: [lab]
+
+networks:
+  lab:
+    driver: bridge
