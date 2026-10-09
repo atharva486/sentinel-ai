@@ -1,52 +1,83 @@
+#!/usr/bin/env python3
+"""dataset.py — read-only audit of the CIC-IDS2017 Improved CSVs.
+
+WHAT THIS FILE IS FOR
+---------------------
+CIC-IDS2017 is the project's dataset AUDIT and a citation source. It is NOT the
+training set.
+
+The model is trained on traffic we generate ourselves in the Docker lab (see
+merge.py) and label by source container IP. That is the only data whose labels
+are exact and whose feature space (the 20 features in features.py) is the one
+the mechanism switch reads.
+
+CIC-IDS2017 is kept because it is the literature EVIDENCE that the project's
+slow-attack focus is the right one. The CNS 2022 audit (Liu, Engelen, Lynar,
+Essam & Joosen) found the only two DoS attacks that actually worked in it were
+DoS Slowloris and DoS Slowhttptest — both slow. Reproduce that table here; it
+goes in the report.
+
+THIS FILE WRITES NOTHING AND FILTERS NOTHING. It reads one column and prints
+counts. There is no cleaning step to get wrong, so it cannot corrupt or empty
+the dataset (the previous version did exactly that: it matched "Benign" against
+the real label "BENIGN" and dropped all 324,335 benign rows in Wednesday alone).
+"""
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from typing import Iterable
 
 import pandas as pd
 
+RAW = Path("data") / "CICIDS2017_improved"
+DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday"]
 
-def load_cicids2017_audited(path: str | Path, days: Iterable[str] | None = None) -> pd.DataFrame:
-    """Load and audit CIC-IDS2017 Improved CSVs.
 
-    Cleaning steps (as per manual):
-    1. Drop rows where 'Attempted Category' != -1 (Attempted are not real attacks)
-    2. Drop 'DoS Hulk' (mis-implemented in dataset)
-    3. Drop 'DoS GoldenEye' and 'DDoS LOIC-HTTP' (ineffective)
-    4. Keep ONLY ['Benign', 'DoS Slowloris', 'DoS Slowhttptest']
+def audit_cicids(path: str | Path = RAW, days: list[str] | None = None) -> pd.Series:
+    """Return overall raw label counts across the given days.
+
+    Reads ONLY the Label column. Fast, and it never touches the rest of a row,
+    so the source CSVs cannot be mutated by running this.
     """
     p = Path(path)
-    if days is None:
-        days = ["monday", "tuesday", "wednesday", "thursday", "friday"]
-
-    dfs: list[pd.DataFrame] = []
+    days = days or DAYS
+    total: dict[str, int] = {}
     for d in days:
         csv = p / f"{d}.csv"
         if not csv.exists():
-            raise FileNotFoundError(f"Missing expected CSV: {csv}")
-        dfs.append(pd.read_csv(csv))
+            print(f"{d:10s}: MISSING ({csv})")
+            continue
+        labels = pd.read_csv(csv, usecols=["Label"], low_memory=False)["Label"]
+        print(f"--- {d} ({len(labels)} flows) ---")
+        print(labels.value_counts().to_string())
+        print()
+        for k, v in labels.value_counts().items():
+            total[str(k)] = total.get(str(k), 0) + int(v)
+    return pd.Series(total).sort_values(ascending=False)
 
-    df = pd.concat(dfs, ignore_index=True)
 
-    if "Attempted Category" in df.columns:
-        df = df[df["Attempted Category"] == -1].copy()
-
-    df = df[df["Label"] != "DoS Hulk"].copy()
-    df = df[~df["Label"].isin(["DoS GoldenEye", "DDoS LOIC-HTTP"])].copy()
-    df = df[df["Label"].isin(["Benign", "DoS Slowloris", "DoS Slowhttptest"])].copy()
-
-    num = df.select_dtypes(include="number")
-    df[num.columns] = num.replace([float("inf"), float("-inf")], pd.NA)
-    df = df.dropna().drop_duplicates()
-
-    return df
+def main() -> None:
+    if not RAW.exists():
+        raise SystemExit(
+            f"No raw CSVs at {RAW}.\n"
+            "Download/unzip CIC-IDS2017 Improved there first. This raw data is "
+            "the audit evidence and must NOT be deleted."
+        )
+    print("CIC-IDS2017 Improved — raw label audit (read-only)\n")
+    counts = audit_cicids()
+    print("=== ALL DAYS ===")
+    print(counts.to_string())
+    print()
+    print("Audit conclusions (Liu et al., IEEE CNS 2022):")
+    print("  * DoS Slowloris and DoS Slowhttptest are the only DoS attacks that")
+    print("    actually exhausted the victim — both slow attacks.")
+    print("  * DoS Hulk was mis-implemented: it needs Keep-Alive, but every Hulk")
+    print("    flow used 'Connection: close', so it behaved like browsing.")
+    print("  * Rows ending in '- Attempted' are failed attacks. The CNS 2022 paper")
+    print("    is explicit: do not treat them as a separate class.")
+    print()
+    print("NOTE: this script produces no training data. Training data comes from")
+    print("      the lab via merge.py (labels = source container IP).")
 
 
 if __name__ == "__main__":
-    base = Path("data") / "CICIDS2017_improved"
-    if not base.exists():
-        print(f"WARNING: {base} not found. Download/unzip CIC-IDS2017 Improved there.")
-        raise SystemExit(0)
-    df = load_cicids2017_audited(base)
-    print(df["Label"].value_counts().to_string())
+    main()

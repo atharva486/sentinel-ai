@@ -2,18 +2,27 @@
 
 ## Datasets
 
-1. CIC-IDS2017 Improved (DistriNet)
+1. **Lab-generated traffic — PRIMARY, the training set**
+   - Source: our Docker lab (`docker-compose.yaml`), captured on the proxy
+   - Labels: the source container IP (`m1_capture/merge.py`), not hand-labelled
+   - Features: the 20 decision-time features in `m1_capture/features.py`
+
+2. **CIC-IDS2017 Improved — EVIDENCE, not training data**
    - Source: https://intrusion-detection.distrinet-research.be/CNS2022/Datasets/CICIDS2017_improved.zip
-   - Days: monday.csv … friday.csv
+   - Days: monday.csv … friday.csv (kept raw — do NOT delete)
+   - Used only for the read-only audit `m1_capture/dataset.py`
+   - Cannot train this model: its 91 CICFlowMeter columns are completion-based
+     and lack the stall/concurrency features the mechanism switch reads
 
-2. CIC-DDoS2019 (Kaggle: dhoogla/cicidscollection) — secondary cross-check
+3. CIC-DDoS2019 (Kaggle: dhoogla/cicidscollection) — optional secondary cross-check
 
-## Cleaning (audit-based)
+## Audit findings (CIC-IDS2017, read-only)
 
-- Drop flows with Attempted Category != -1 (CNS 2022: "Attempted flows must not be treated as a separate label")
-- Drop DoS Hulk (mis-implemented; needs Keep-Alive but traffic used Connection: close)
-- Drop DoS GoldenEye, DDoS LOIC-HTTP (ineffective per audit)
-- Keep only: Benign, DoS Slowloris, DoS Slowhttptest
+- Only DoS Slowloris and DoS Slowhttptest actually worked — both slow attacks.
+- DoS Hulk was mis-implemented (needs Keep-Alive; traffic used Connection: close).
+- DoS GoldenEye and DDoS LOIC-HTTP are ineffective.
+- Rows marked "- Attempted" are failed attacks and must not be a separate class.
+- Label spelling is `BENIGN` (all caps); match case-insensitively, never assume.
 
 ## Features (20)
 
