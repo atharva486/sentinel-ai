@@ -1,6 +1,10 @@
 services:
+  # IPs are PINNED so that every flow's source IP maps deterministically to a
+  # label in m1_capture/merge.py (CONTAINER_ROLE). Without pinning, Docker hands
+  # out IPs in arbitrary order and the proxy can take 172.18.0.5, which would be
+  # mis-labelled "benign". Do not remove the ipv4_address lines.
   proxy:
-    image: nginx:1.25-alpine
+    build: ./proxy
     container_name: proxy
     volumes:
       - ./proxy/nginx.conf:/etc/nginx/nginx.conf:ro
@@ -8,37 +12,57 @@ services:
       - ./captures:/captures
       - ./logs:/var/log/nginx
     ports: ["8080:80"]
-    networks: [lab]
+    networks:
+      lab:
+        ipv4_address: 172.18.0.2
 
   backend:
     image: nginx:1.25-alpine
     container_name: backend
-    networks: [lab]
+    networks:
+      lab:
+        ipv4_address: 172.18.0.3
 
   sandbox-backend:
     image: nginx:1.25-alpine
     container_name: sandbox_backend
-    networks: [lab]
+    networks:
+      lab:
+        ipv4_address: 172.18.0.4
 
   legit-loadgen:
     build: ./gen
     container_name: legit_loadgen
-    networks: [lab]
+    cap_add: ["NET_ADMIN"]   # allows per-worker source IPs (gen --ip-base)
+    networks:
+      lab:
+        ipv4_address: 172.18.0.5
 
   slow-gen:
     build: ./gen
     container_name: slow_gen
-    networks: [lab]
+    cap_add: ["NET_ADMIN"]
+    networks:
+      lab:
+        ipv4_address: 172.18.0.6
 
   flood-gen:
     build: ./gen
     container_name: flood_gen
-    networks: [lab]
+    cap_add: ["NET_ADMIN"]
+    networks:
+      lab:
+        ipv4_address: 172.18.0.7
 
   redis:
     image: redis:7-alpine
-    networks: [lab]
+    networks:
+      lab:
+        ipv4_address: 172.18.0.8
 
 networks:
   lab:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.18.0.0/16

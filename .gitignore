@@ -3,7 +3,18 @@ captures/
 logs/
 *.pcap
 *.csv
+*.jsonl
+# Keep the dataset (and its session/backup evidence) tracked so teammates can
+# clone it — only huge binary artifacts stay ignored.
 *.parquet
+!data/*.parquet
+# Other-agent captures — provenance unverifiable (another agent produced them at
+# 11:07–11:35 on 10 Oct; campaign_v1 is 3 sub-runs glued into one file). NOT in
+# the final dataset; kept on disk only, never committed.
+data/features_campaign_v1_flat_ips.parquet
+data/features_sA.parquet
+data/features_sB.parquet
+data/features_sC.parquet
 
 # Environment
 .venv/
