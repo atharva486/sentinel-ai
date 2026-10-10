@@ -59,6 +59,7 @@ class FlowState:
     t_first: float = 0.0          # first byte seen in either direction
     t_last: float = 0.0
     t_close: float | None = None
+    t_first_bwd: float = 0.0      # first BACKWARD data byte (HTTP response start)
 
     fwd_bytes: int = 0
     fwd_pkts: int = 0
@@ -91,6 +92,8 @@ class FlowState:
         else:
             self.bwd_pkts += 1
             self.bwd_bytes += len(payload)
+            if payload and self.t_first_bwd == 0.0:
+                self.t_first_bwd = ts
             if len(self.bwd_payload) < PAYLOAD_CAP:
                 self.bwd_payload.extend(payload[: PAYLOAD_CAP - len(self.bwd_payload)])
 
@@ -123,6 +126,7 @@ class FlowState:
             "bwd_bytes": self.bwd_bytes,
             "bwd_pkts": self.bwd_pkts,
             "fwd_times": self.fwd_times,
+            "t_first_bwd": self.t_first_bwd,
             "fwd_payload": bytes(self.fwd_payload).hex(),
             "bwd_payload": bytes(self.bwd_payload).hex(),
             "syn_retries": self.syn_retries,
@@ -169,10 +173,12 @@ def parse_http(payload: bytes) -> dict:
 
     Returns:
       method, path, header_complete, header_bytes, declared_body,
-      req_count
+      req_count, ground_truth
 
     header_complete is False when we never saw CRLFCRLF — which is exactly
     the Slowloris case, and the single most discriminative field we have.
+
+    ground_truth is the value of X-Ground-Truth header if present, else None.
     """
     end = payload.find(b"\r\n\r\n")
     header_complete = end >= 0
@@ -187,6 +193,7 @@ def parse_http(payload: bytes) -> dict:
             path = parts[1].decode("latin-1")
 
     declared = 0
+    ground_truth = None
     for ln in lines[1:]:
         low = ln.lower()
         if low.startswith(b"content-length:"):
@@ -194,7 +201,13 @@ def parse_http(payload: bytes) -> dict:
                 declared = int(ln.split(b":", 1)[1].strip())
             except ValueError:
                 declared = 0
-            break
+            # NOTE: do NOT break here. X-Ground-Truth is emitted AFTER
+            # Content-Length in POST requests, so an early break silently lost
+            # the per-flow label and fell back to the IP prefix. That only
+            # looked correct while every source-IP pool was class-pure; it
+            # mislabels a mixed-role IP (benign then attack from one address).
+        elif low.startswith(b"x-ground-truth:"):
+            ground_truth = ln.split(b":", 1)[1].strip().decode("latin-1")
 
     return {
         "method": method,
@@ -203,6 +216,7 @@ def parse_http(payload: bytes) -> dict:
         "header_bytes": (end + 4) if header_complete else len(payload),
         "declared_body": declared,
         "req_count": count_request_lines(payload),
+        "ground_truth": ground_truth,
     }
 
 
