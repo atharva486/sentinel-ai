@@ -55,7 +55,6 @@ import math
 
 RATE_FEATURES = frozenset({
     "bytes_in_per_s",
-    "bytes_out_per_s",
     "requests_per_s",
     "interarrival_mean",
     "interarrival_std",
@@ -75,7 +74,6 @@ STALL_FEATURES = frozenset({
     "body_frac_sent",
     "bytes_declared",
     "body_drip_rate_bps",
-    "time_to_first_byte",
     "header_complete",
 })
 
@@ -87,7 +85,6 @@ FEATURE_ORDER = [
     # --- rate tier: what limit_req responds to ---
     "bytes_in",
     "bytes_in_per_s",
-    "bytes_out_per_s",
     "requests_per_s",
     "packets_per_s",
     "interarrival_mean",
@@ -103,11 +100,21 @@ FEATURE_ORDER = [
     "body_frac_sent",
     "bytes_declared",
     "body_drip_rate_bps",
-    "time_to_first_byte",
     "header_complete",
     # --- shape ---
-    "syn_retries",
-    "bytes_in_ratio",
+    # NOTE — these fields stay in schemas.py FlowRecord (the frozen contract)
+    # and are still emitted by sensor.py / features.py, but are deliberately
+    # NOT consumed by the model because they are structurally CONSTANT on the
+    # emulated lab network (so they carry no signal here):
+    #   * syn_retries        : constant 0 (clean bridge, no retransmission)
+    #   * bytes_out_per_s    : constant 0 (no backward bytes on the lab)
+    #   * bytes_in_ratio     : constant 1 (fwd/(fwd+bwd) with bwd == 0)
+    #   * time_to_first_byte : constant 0 (proxy->client latency on a local
+    #                           bridge, below the sensor's timing resolution)
+    # The last three were only NON-constant in the other-agents' captures —
+    # which used an unknown sensor variant, one more reason those captures are
+    # excluded from the final set (see DATA_CARD). In a real WAN deployment,
+    # re-enable these upstream.
 ]
 
 # Features deliberately absent. Each one would have leaked or been useless.
@@ -179,8 +186,10 @@ def open_flow_features(rec: dict, http: dict, now: float) -> dict:
     how long it has been open, how much it declared, how much arrived, and
     how fast the drip is.
     """
-    is_open = rec["t_close"] is None
-    age = max(0.0, now - rec["t_first"]) if is_open else (rec["t_close"] - rec["t_first"])
+    is_open = rec["t_close"] is None or now < rec["t_close"]
+    t_close = rec["t_close"]
+    age = (max(0.0, now - rec["t_first"]) if is_open
+           else (t_close - rec["t_first"]))
 
     declared = float(http["declared_body"] or 0)
     header_bytes = float(http["header_bytes"] or 0)
@@ -213,10 +222,13 @@ def open_flow_features(rec: dict, http: dict, now: float) -> dict:
     # body drip rate: how fast the declared body is actually arriving.
     drip = _safe_div(body_received, age)
 
-    ttfb = None
-    if rec["bwd_bytes"] > 0 and rec["bwd_payload"]:
-        ttfb = _safe_div(rec["t_close"] or now, rec["t_first"]) if is_open else \
-               _safe_div(rec["t_close"] - rec["t_first"], 1.0)
+    # time_to_first_byte = when the first backward (response) byte arrived,
+    # measured from the first forward byte. The earlier code fell back to the
+    # flow duration, which is not a time-to-first-byte and duplicated
+    # conn_age_s; and it read t_close (the flow's true close time) as if the
+    # flow had ended, which is future information relative to `now`.
+    t_first_bwd = rec.get("t_first_bwd") or 0.0
+    ttfb = (t_first_bwd - rec["t_first"]) if t_first_bwd > 0 else None
 
     return {
         "bytes_declared":      declared,
@@ -238,34 +250,49 @@ class WindowTracker:
 
     Concurrency is a property of an ENTITY over a window, not of a flow. This
     is the concrete reason the design needs two tiers.
+
+    A connection is OPEN at time `now` if it opened at or before `now` and has
+    not closed by `now`. Both facts are observable at `now`, so this is NOT
+    leakage (see the NO LEAKAGE RULE above).
+
+    Why this is not the old events version: sensor.py stamps EVERY flow with a
+    t_close (even flows still open when the capture ends). The old code stored
+    open/close events and returned opens-minus-closes, so every connection
+    contributed exactly one open and one close and the result was ALWAYS 0. The
+    concurrency tier — the signal limit_conn exists to read — was dead, which
+    would make the SHAP->mechanism switch unable to ever pick limit_conn.
     """
 
     def __init__(self, window_s: float = 10.0):
         self.window_s = window_s
-        self.events: dict[str, list[tuple[float, str]]] = {}
+        # entity -> list of [open_ts, close_ts | None]
+        self.intervals: dict[str, list[list[float | None]]] = {}
 
     def on_connect(self, entity: str, ts: float) -> None:
-        self.events.setdefault(entity, []).append((ts, "open"))
+        self.intervals.setdefault(entity, []).append([ts, None])
 
     def on_close(self, entity: str, ts: float) -> None:
-        self.events.setdefault(entity, []).append((ts, "close"))
-
-    def _prune(self, entity: str, now: float) -> list[tuple[float, str]]:
-        evs = self.events.get(entity, [])
-        cutoff = now - self.window_s
-        evs = [e for e in evs if e[0] >= cutoff]
-        self.events[entity] = evs
-        return evs
+        # Closes the most recently opened, still-open interval for this entity.
+        # Callers use a connect-then-close pair per flow, so this is the match.
+        ivs = self.intervals.get(entity)
+        if ivs and ivs[-1][1] is None:
+            ivs[-1][1] = ts
 
     def window_features(self, entity: str, now: float) -> dict:
-        evs = self._prune(entity, now)
-        opened = [t for t, k in evs if k == "open"]
-        # concurrency = opens minus closes over the window
-        live = sum(1 for t, k in evs if k == "open") - sum(1 for t, k in evs if k == "close")
+        lo = now - self.window_s
+        live = 0
+        opened = 0
+        for a, b in self.intervals.get(entity, []):
+            if a > now:
+                continue                      # has not started as of `now`
+            if b is None or b > now:
+                live += 1                     # open at `now`
+            if lo <= a <= now:
+                opened += 1
         span = max(1e-6, self.window_s)
         return {
-            "concurrent_conns":            float(max(0, live)),
-            "conns_per_second_opened":     len(opened) / span,
+            "concurrent_conns":        float(live),
+            "conns_per_second_opened": opened / span,
         }
 
 
