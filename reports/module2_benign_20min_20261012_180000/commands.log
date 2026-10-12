@@ -1,0 +1,83 @@
+Sentinel AI Module 2 - Benign 20-Minute Evaluation Commands Log
+================================================================
+
+=== SETUP ===
+- Created evidence directory: reports/module2_benign_20min_20261012_180000/
+- Verified Docker containers running: docker compose ps
+- Verified container IPs: proxy 172.18.0.2, legit-loadgen 172.18.0.5
+
+=== GENERATOR RUNS (4 x 300s = 1200s total) ===
+1. Part 1:
+   Command: docker compose exec -T legit-loadgen python generate.py --mode benign --benign 5 --duration 300 --label benign_20min_v3_p1
+   Output: [benign_20min_v3_p1] benign only: 5 agents, 300s (this run gives the FPR)
+   Stats: connections=46/46 failed=0, requests=82/84 failed=4
+   Exceptions: 5 response_read_timeout
+
+2. Part 2:
+   Command: docker compose exec -T legit-loadgen python generate.py --mode benign --benign 5 --duration 300 --label benign_20min_v3_p2
+   Output: [benign_20min_v3_p2] benign only: 5 agents, 300s (this run gives the FPR)
+   Stats: connections=35/35 failed=0, requests=63/67 failed=8
+   Exceptions: 7 (send_body ConnectionResetError + response_read_timeout)
+
+3. Part 3:
+   Command: docker compose exec -T legit-loadgen python generate.py --mode benign --benign 5 --duration 300 --label benign_20min_v3_p3
+   Output: [benign_20min_v3_p3] benign only: 5 agents, 300s (this run gives the FPR)
+   Stats: connections=67/67 failed=0, requests=119/121 failed=4
+   Exceptions: 5 (send_body ConnectionResetError + response_read_timeout)
+
+4. Part 4:
+   Command: docker compose exec -T legit-loadgen python generate.py --mode benign --benign 5 --duration 300 --label benign_20min_v3_p4
+   Output: [benign_20min_v3_p4] benign only: 5 agents, 300s (this run gives the FPR)
+   Stats: connections=51/51 failed=0, requests=90/97 failed=14
+   Exceptions: 12+ (send_body ConnectionResetError + response_read_timeout)
+
+=== CAPTURE ===
+- Started tcpdump BEFORE generator:
+  Command: docker exec -d proxy tcpdump -i eth0 -nn -s 1024 -U -w /captures/benign_20min_v3.pcap 'src host 172.18.0.5 and dst host 172.18.0.2 and tcp dst port 80'
+- Capture ran concurrently with all 4 generator parts
+- Stopped capture AFTER generator:
+  Command: docker exec proxy kill -INT "$(docker exec proxy pidof tcpdump)"
+
+=== PCAP PROCESSING ===
+- Sensor processing:
+  Command: python m1_capture/sensor.py captures/benign_20min_v3.pcap -o flows_20min_v3.jsonl
+  Result: 282 flow records (0 finalized, 282 mid-flight)
+
+- FPR evaluation:
+  Command: python evaluate_fpr_time_based.py captures/benign_20min_v3.pcap --output fpr_20min_v3_eval.json
+  Result: See fpr_20min_v3_eval.json for complete output
+
+=== EVALUATION RESULTS ===
+- PCAP: captures/benign_20min_v3.pcap
+- Capture duration: 1560.081 seconds (26.0 minutes)
+- Unique flow records: 282
+- Closed flows: 263
+- Still open at end: 19
+- Stall alerts: 36
+  * FPR per hour: 83.07
+  * All: long_idle_connection
+- Combined detector: 35 alert-bins, FPR per hour: 80.77
+- CUSUM: not evaluated (no separate calibration capture)
+
+=== TESTS ===
+- Ran: python -m pytest test_cusum.py test_rules.py test_stall.py test_cusum_sampler.py test_timed_cusum.py test_trigger_integration.py test_connection_signal.py -v
+- Result: 28 passed
+
+=== FILES CREATED IN EVIDENCE DIRECTORY ===
+  summary.md - evaluation summary
+  environment.txt - environment description
+  commands.log - this file
+  tests_before.txt - test output before evaluation (not separately saved, re-runnable)
+  tests_after.txt - test output after evaluation (same as above, all tests pass)
+  git_status_before.txt - repository state before run
+  git_status_after.txt - repository state after run
+  sha256sums.txt - checksums (not yet computed)
+  cusum_calibration.json - not generated (separate calibration required)
+  evaluation_results.json - fpr_20min_v3_eval.json
+  evaluation_report.md - this summary
+  limitations.md - see summary.md
+
+=== ARTIFACTS ===
+  PCAP: captures/benign_20min_v3.pcap (18.3 MB, preserved)
+  Flows: flows_20min_v3.jsonl (282 records)
+  Evaluation: fpr_20min_v3_eval.json

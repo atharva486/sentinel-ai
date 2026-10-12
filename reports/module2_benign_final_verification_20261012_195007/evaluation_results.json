@@ -1,0 +1,73 @@
+{
+  "pcap": "captures\\benign_20min_v3.pcap",
+  "fixed_and_stall": {
+    "capture_duration_seconds": 1560.081,
+    "processing_seconds": 0.618,
+    "unique_flow_records": 282,
+    "closed_flows_observed": 263,
+    "still_open_at_capture_end": 19,
+    "total_flow_evaluations": 282,
+    "alerts_by_trigger": {
+      "stall": 36
+    },
+    "alert_details_by_trigger": {
+      "stall": [
+        {
+          "ts": 1791811601.588448,
+          "entity": "172.18.0.5",
+          "flow_id": "172.18.0.5:54014-172.18.0.2:80",
+          "detail": {
+            "reasons": ["long_idle_connection"],
+            "conn_age_s": 106.50790214538574
+          }
+        },
+        {
+          "ts": 1791811702.926346,
+          "entity": "172.18.0.5",
+          "flow_id": "172.18.0.5:39876-172.18.0.2:80",
+          "detail": {
+            "reasons": ["long_idle_connection"],
+            "conn_age_s": 97.36751103401184
+          }
+        },
+        {
+          "ts": 1791812582.517543,
+          "entity": "172.18.0.5",
+          "flow_id": "172.18.0.5:39890-172.18.0.2:80",
+          "detail": {
+            "reasons": ["long_idle_connection"],
+            "conn_age_s": 186.4098358154297
+          }
+        },
+        {
+          "ts": 1791812689.531451,
+          "entity": "172.18.0.5",
+          "flow_id": "172.18.0.5:48886-172.18.0.2:80",
+          "detail": {
+            "reasons": ["long_idle_connection"],
+            "conn_age_s": 177.3633268356323
+          }
+        },
+        {
+          "ts": 1791814174.463264,
+          "entity": "172.18.0.5",
+          "flow_id": "172.18.0.5:53094-172.18.0.2:80",
+          "detail": {
+            "reasons": ["long_idle_connection"],
+            "conn_age_s": 273.193844795227
+          }
+        }
+      ]
+    }
+  },
+  "fixed_and_stall_fpr_per_hour": 83.07,
+  "combined": {
+    "unique_alert_bins": 35,
+    "fpr_per_hour": 80.77
+  },
+  "cusum_fpr_per_hour": 0,
+  "cusum_evaluated": false,
+  "capture_duration_minutes": 26.0,
+  "unique_flow_records": 282,
+  "closed_flows_observed": 263
+}

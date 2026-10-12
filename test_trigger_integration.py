@@ -71,6 +71,22 @@ class TestTriggerIntegration(unittest.TestCase):
         self.assertGreaterEqual(event.severity, 0.0)
         self.assertLessEqual(event.severity, 1.0)
 
+    def test_progressing_upload_does_not_trigger_body_incomplete(self):
+        flow = make_flow(
+            conn_age_s=20.0,
+            header_complete=1.0,
+            bytes_declared=1_000_000.0,
+            body_frac_sent=0.30,
+            body_drip_rate_bps=12_000.0,
+            stall_time_s=20.0,
+            is_open=1.0,
+        )
 
+        event = detect_stall(flow)
+
+        self.assertTrue(
+            event is None or "body_incomplete" not in event.detail["reasons"],
+            f"Progressing upload incorrectly flagged: {event.detail if event else None}",
+        )
 if __name__ == "__main__":
     unittest.main()

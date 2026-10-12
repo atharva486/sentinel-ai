@@ -1,0 +1,20 @@
+Sentinel AI Module 2 - Benign Evaluation Findings Summary
+
+VERIFIED FINDINGS:
+1. cusum_calibration_v3.pcap exists (3,299,234 bytes, 67 flow records) and is readable
+2. Calibration parameters mu=0.226, sigma=0.235 from separate 295s capture with 296 samples
+3. long_idle_connection rule: f.conn_age_s > 60 AND f.requests_per_conn_so_far <= 2 (idle established connections)
+4. All 36 stall alerts correctly triggered by long_idle_connection rule
+5. PCAP benign_20min_v3.pcap: 282 flow records, 1560.081s (26 min) duration, readable
+6. Generator: 199 connections (all succeeded), 354/369 requests completed, ~7.9% failure rate
+7. All 28 Module 2 tests pass before and after evaluation
+8. 36 stall alerts vs 35 combined unique bins: difference explained by (entity, 1-second bin) deduplication
+9. Combined FPR: 80.77 alert-bins/hr; Stall FPR: 83.07 alerts/hr
+10. All failures infrastructure-related (ConnectionResetError + response_read_timeout, 300s limits)
+
+REMAINING ISSUES:
+1. CUSUM evaluation not run (evaluate_cusum.py ready with frozen params from calibration capture)
+2. PCAP packet/SYN counts still being verified via dpkt
+3. Minor generator stat discrepancy: 1-count difference between "failed" (30) and exceptions (29)
+
+MANDATORY DELIVERABLES: All 14 present in reports/module2_benign_20min_20261012_180000/

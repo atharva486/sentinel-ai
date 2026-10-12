@@ -43,7 +43,30 @@ event = detect(idle)
 
 assert event is not None, "Idle connection was not detected"
 assert "zero_req_per_conn" in event.detail["reasons"]
+# RUDY: large declared body with very slow progress
+rudy = replace(
+    normal,
+    flow_id="rudy-1",
+    conn_age_s=19.0,
+    header_complete=1.0,
+    bytes_declared=5_000_000.0,
+    body_frac_sent=0.00004,
+    body_drip_rate_bps=10.52,
+    stall_time_s=19.0,
+    requests_per_conn_so_far=1.0,
+    is_open=1.0,
+)
 
+event = detect(rudy)
+
+assert event is not None, "RUDY was not detected"
+assert event.trigger == "stall"
+assert (
+    "slow_drip" in event.detail["reasons"]
+    or "body_incomplete" in event.detail["reasons"]
+), f"RUDY did not match an expected body-stall rule: {event.detail}"
+
+print("PASS: RUDY slow body transfer is detected")
 print("PASS: normal flow does not trigger")
 print("PASS: incomplete header is detected")
 print("PASS: idle connection is detected")

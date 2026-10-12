@@ -1,0 +1,17 @@
+{
+  "pcap": "captures/benign_20min_v3.pcap",
+  "capture_duration_seconds": 1560.081,
+  "signal_sample_count": 1561,
+  "cusum_alert_count": 114,
+  "baseline_mu": 0.22635,
+  "baseline_sigma": 0.23491,
+  "input_k": 0.5,
+  "input_h": 5.0,
+  "internally_scaled_k": 0.113,
+  "internally_scaled_h": 1.175,
+  "calibration_pcap": "captures/cusum_calibration_v3.pcap",
+  "calibration_sample_count": 296,
+  "note": "CUSUM evaluation on 20-minute benign capture using frozen calibration parameters. 114 alerts from 1,561 sampled intervals. Alert frequency is NOT automatically the assignment's false-positive rate. Calibration performed on separate capture (cusum_calibration_v3.pcap) with 296 samples, mu=0.22635, sigma=0.23491. Parameters k=0.5*sigma=0.113 and h=5.0*sigma=1.175 internally scaled per cusum.py implementation.",
+  "evaluation_method": "connection_start_signal_sampling with window=10s, interval=1s through 1,561-second capture",
+  "distinct_warning": "Alert frequency from a benign-only evaluation does not constitute attack detection accuracy. This CUSUM FPR evaluation is for benign-traffic false-positive rate assessment only."
+}

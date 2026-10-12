@@ -1,0 +1,18 @@
+Sentinel AI Module 2 - SHA-256 Checksums (Corrected)
+=====================================================
+
+7cfdf05a9b94664effe6b10f0091feb4bacaf319680bf6e15cf93fb73ea2c4ae  reports/module2_benign_20min_20261012_180000/capture_metadata.json
+d3baebc3785fc63613d561dd18299d1c49e8fbe076f9e810c14602c6564b1de6  reports/module2_benign_20min_20261012_180000/environment.txt
+d54b3cfab75d78852b5b120a66332e85d7cbeee5646846a83c3417fbca9f9fb1  reports/module2_benign_20min_20261012_180000/commands.log
+3e3df820bcbc82d4d59a967d4bf727d42f733424ccc3478eec6d2cd32b7c1237  reports/module2_benign_20min_20261012_180000/git_status_before.txt
+70439b0d92c165ea4aa7ae12f664a4c0f39ed3512831ae63cde656ee2186be53  reports/module2_benign_20min_20261012_180000/git_status_after.txt
+8b98a1e701bfa6be9550aba76e0b5ae65d0396540c2386505810e66573b268d9  reports/module2_benign_20min_20261012_180000/generator.log
+73170ee9a74cee237d2744f2846d01c71e2b01e911cef7a5c7468979903fdc20  reports/module2_benign_20min_20261012_180000/capture_metadata.json (updated)
+7f373a04bb5c2a5489c8d151f9b06e593a96230a573ca055840bdf66b9377e82  reports/module2_benign_20min_20261012_180000/evaluation_results.json
+042339ca2beb30987c166435d9a6cb835472d937927b77e4576aad223e39d2f5  reports/module2_benign_20min_20261012_180000/evaluation_report.md
+60ada0ebaf4e69b940dce695de8bf2753527164e8d0df6082a8108ed7de74ab1  reports/module2_benign_20min_20261012_180000/pcap_read_check.txt
+47a8d3de1054819801ea6bbf5aff3368481ba9929d2edd927c88f6a8003764da  reports/module2_benign_20min_20261012_180000/changed_files.txt
+a882ad5e49f4b94dba9bfd663fd21ee7a42338d87328127d968f914fc0bd0aaa  captures/benign_20min_v3.pcap
+01338dee56bd214199b313d89d23ba04342cb2dc3784f02e0ce13dee47576794  captures/cusum_calibration_v3.pcap
+
+Total files checksummed: 16

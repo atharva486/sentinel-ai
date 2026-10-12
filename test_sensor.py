@@ -14,9 +14,9 @@ import dpkt
 import sys
 from pathlib import Path
 
-from features import (FEATURE_ORDER, WindowTracker, build_features,
+from m1_capture.features import (FEATURE_ORDER, WindowTracker, build_features,
                       group_of, vectorise)
-from sensor import parse_http, read_pcap
+from m1_capture.sensor import parse_http, read_pcap
 
 T0 = 1_700_000_000.0
 CLIENT = "10.0.0.11"

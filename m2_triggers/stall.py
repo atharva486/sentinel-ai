@@ -30,12 +30,10 @@ def detect(
         f.bytes_declared > 0
         and f.body_frac_sent < 0.5
         and f.conn_age_s > STALL_THRESHOLD_S
+        and f.body_drip_rate_bps < 100
     ):
         reasons.append("body_incomplete")
-        severity = max(
-            severity,
-            min(1.0, max(0.0, 1.0 - f.body_frac_sent)),
-        )
+        severity = max(severity, min(1.0, max(0.0, 1.0 - f.body_frac_sent)))
 
     # A large body is arriving unusually slowly.
     if (

@@ -1,0 +1,36 @@
+Sentinel AI Module 2 - Benign Evaluation Environment
+===================================================
+
+Repository: C:\Users\Ayush Lokare\Projects\AI_pro\sentinel-ai
+Branch: main
+Python: C:\Program Files\Python313\python.exe (3.13.4)
+PowerShell: Windows PowerShell 5.1
+
+Docker Containers (docker compose ps):
+  proxy: sentinel-ai-proxy (Up, port 8080->80/tcp, IP: 172.18.0.2)
+  legit-loadgen: sentinel-ai-legit-loadgen (Up, IP: 172.18.0.5)
+  redis: sentinel-ai-redis-1 (Up, port 6379/tcp)
+  backend: sentinel-ai-backend (Up, aiohttp server on port 80)
+  flood-gen: sentinel-ai-flood-gen (Up)
+  slow-gen: sentinel-ai-slow-gen (Up)
+  sandbox_backend: nginx:1.25-alpine (Up)
+
+Capture Infrastructure:
+  Proxy filter: src host 172.18.0.5 and dst host 172.18.0.2 and tcp dst port 80
+  Capture tool: tcpdump -i eth0 -nn -s 1024 -U -w <filename>
+  Generator: gen/generate.py --mode benign --benign 5
+
+Generator Run Configuration:
+  4 chunks x 300 seconds = 1200 seconds total (20 minutes)
+  Mode: benign only
+  n_benign: 5 agents
+  think time: 0.2-2.0s (random per worker)
+  slow_fraction: 0.15 (internal to generator)
+
+Previous captures in this session:
+  benign_1hour.pcap: 3466s (58 min), 529 flows
+  benign_10min.pcap: 622s (10 min), 88 flows
+  benign_2min_v7.pcap: 149s (2 min), 56 flows
+
+This evaluation:
+  benign_20min_v3.pcap: 1560s (26 min), 282 flows

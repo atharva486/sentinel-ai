@@ -1,6 +1,6 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
-test_mechanism.py — verify the mechanism switch and the ablation harness.
+test_mechanism.py â€” verify the mechanism switch and the ablation harness.
 
 Two things this proves, both of which the earlier version got wrong:
 
@@ -19,7 +19,7 @@ from __future__ import annotations
 import sys
 
 import test_sensor as T
-from features import WindowTracker, build_features, group_of
+from m1_capture.features import WindowTracker, build_features, group_of
 from mechanism import (choose_by_shap_group, choose_by_shap_top1,
                        choose_by_trigger, choose_static, contains,
                        shap_group_scores, Policy, precision_at_k)
@@ -38,11 +38,11 @@ def check(label, cond, detail=""):
 def features_of(name):
     path = {"benign": T.benign, "slowloris": T.slowloris,
             "rudy": T.rudy, "flood": T.flood}[name]()
-    recs = __import__("sensor").read_pcap(path, flush_after=5.0)
+    recs = __import__("m1_capture.sensor", fromlist=["read_pcap"]).read_pcap(path, flush_after=5.0)
     win = WindowTracker()
     rows = []
     for r in recs:
-        from sensor import parse_http
+        from m1_capture.sensor import parse_http
         http = parse_http(bytes.fromhex(r["fwd_payload"]))
         win.on_connect("e1", r["t_first"])
         if r["t_close"] is not None:
@@ -185,8 +185,8 @@ def main() -> None:
 
     # Case 3: the honest consequence. Normalising by the number of features
     # that actually CONTRIBUTED (not the group size in FEATURE_ORDER) undoes
-    # the sum and lands exactly back on top-1 — i.e. there is no free lunch.
-    from features import STALL_FEATURES, CONCURRENCY_FEATURES, RATE_FEATURES
+    # the sum and lands exactly back on top-1 â€” i.e. there is no free lunch.
+    from m1_capture.features import STALL_FEATURES, CONCURRENCY_FEATURES, RATE_FEATURES
     sizes = {"stall": STALL_FEATURES, "concurrency": CONCURRENCY_FEATURES,
              "rate": RATE_FEATURES}
     contrib = {}
@@ -197,7 +197,7 @@ def main() -> None:
     tm = max(mean_norm, key=mean_norm.get)
     print(f"        mean-per-contributing-feature: "
           + ", ".join(f"{k}={v:.3f}" for k, v in sorted(mean_norm.items())))
-    print(f"        winner '{tm}' — back to top-1, because averaging undoes the sum")
+    print(f"        winner '{tm}' â€” back to top-1, because averaging undoes the sum")
     check("mean-normalisation degenerates to top-1 (no free lunch)",
           tm == group_of(t1), (tm, group_of(t1)))
     print("        -> CONCLUSION for the report: group-sum and top-1 are two")
