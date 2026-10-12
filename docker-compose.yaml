@@ -61,6 +61,7 @@ services:
     networks:
       lab:
         ipv4_address: 172.18.0.8
+    ports: ["6380:6379"]
 
 networks:
   lab:
