@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 test_mechanism.py â€” verify the mechanism switch and the ablation harness.
 
@@ -22,7 +22,8 @@ import test_sensor as T
 from m1_capture.features import WindowTracker, build_features, group_of
 from mechanism import (choose_by_shap_group, choose_by_shap_top1,
                        choose_by_trigger, choose_static, contains,
-                       shap_group_scores, Policy, precision_at_k)
+                       shap_group_scores, Policy, precision_at_k,
+                       SLOW_FEATURES)
 
 FAIL = []
 
@@ -205,6 +206,10 @@ def main() -> None:
     print("           evidence is spread, biased when one group has more members.")
     print("           Report BOTH as ablation arms and state which is deployed.")
     print("           Do not pick whichever number looks better.")
+
+    from m1_capture.features import STALL_FEATURES, CONCURRENCY_FEATURES
+    check("SLOW_FEATURES equals STALL_FEATURES | CONCURRENCY_FEATURES",
+          SLOW_FEATURES == (STALL_FEATURES | CONCURRENCY_FEATURES))
 
     print("\n=== POLICY LADDER: escalation actually works ===")
     # Regression guard. The original decide() only walked toward LESS severe
