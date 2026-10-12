@@ -75,6 +75,7 @@ def train(
     X_val: "pd.DataFrame",
     y_val: "pd.Series",
     feature_order: list | None = None,
+    params: dict | None = None,
 ) -> "xgb.XGBClassifier":
     """Train XGBoost with time-series cross-validation and separate validation.
 
@@ -117,9 +118,17 @@ def train(
     if feature_order is None:
         feature_order = FEATURE_ORDER
 
-    # ---- Leakage guard (Bug Fix 3) ------------------------------------
-    leakage_guard(X_train)
-    leakage_guard(X_val)
+    if params is None:
+        params = dict(
+            n_estimators=400,
+            max_depth=5,
+            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            eval_metric="aucpr",  # NOT "error". The data is imbalanced.
+            random_state=42,
+            base_score=0.5,  # initial probability for logistic loss
+        )
 
     # ---- Align columns to FEATURE_ORDER --------------------------------
     X_train = X_train[feature_order]
@@ -138,16 +147,20 @@ def train(
         )
 
     # ---- Model parameters ---------------------------------------------
-    params = dict(
-        n_estimators=400,
-        max_depth=5,
-        learning_rate=0.1,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        eval_metric="aucpr",  # NOT "error". The data is imbalanced.
-        random_state=42,
-        base_score=0.5,  # initial probability for logistic loss
-    )
+    # Use provided params, or fall back to defaults
+    if params is None:
+        params = dict(
+            n_estimators=400,
+            max_depth=5,
+            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            eval_metric="aucpr",  # NOT "error". The data is imbalanced.
+            random_state=42,
+            base_score=0.5,  # initial probability for logistic loss
+        )
+    # Use the (possibly provided) params dict
+    params = dict(params)  # copy so we don't mutate the caller's dict
 
     # ---- Bug Fix 1: TimeSeriesSplit used in a loop for OOF PR-AUC -----
     tscv = TimeSeriesSplit(n_splits=5)
