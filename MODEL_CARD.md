@@ -98,11 +98,11 @@ mean_preds, fractions = reliability_diagram(model, X_cal, y_cal, filepath="relia
 |---|---|---|---|
 | **XGBoost model** | `model.save_model(path)` | `xgb.Booster.load_model()` / `XGBClassifier()` + `load_model()` | ✅ Standard XGBoost |
 | **Isotonic calibrator** | `joblib.dump(calibrator, path)` | `joblib.load(path)` | ✅ Sklearn compatible |
-| **CalibrationResult** | ❌ Not implemented | ❌ Not implemented | No `save/load` methods; both components are individually serializable |
+| **CalibrationResult** | `result.save(path)` | `CalibrationResult.load(path)` | **Both model and calibrator persisted together** in a single `.joblib` artifact; feature order validated on load. See Section 7 for details. |
 | **SHAP explainer** | ❌ Not implemented | ❌ Not implemented | `shap.TreeExplainer(model)` must be rebuilt on load |
 | **MODEL_CARD.md** | ✅ This document | Read-only | Present at repository root |
 
-**Deployment note**: A caller must serialize the model and calibrator separately. No end-to-end persistence pipeline exists in this repository.
+**Deployment note**: `CalibrationResult.save/load` persists and restores the complete calibration state in one operation, eliminating the need for callers to separately serialize the model and calibrator.
 
 ## 8. Known Limitations
 

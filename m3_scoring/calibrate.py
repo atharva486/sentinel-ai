@@ -79,6 +79,170 @@ class CalibrationResult:
         calibrated = max(0.0, min(1.0, calibrated))
         return calibrated
 
+    # ---------------------------------------------------------------------------
+    # Persistence
+    # ---------------------------------------------------------------------------
+    def save(self, path: str) -> None:
+        """Save the calibration result to a file.
+
+        Saves the XGBoost model (as JSON), the isotonic calibrator, and the
+        feature order.  Uses ``joblib`` for the complete artifact.
+
+        Parameters
+        ----------
+        path : str
+            Path to the output file.  Recommend ``*.joblib`` extension.
+
+        Raises
+        ------
+        CalibrationError
+            If the path is invalid, write fails, or the model/calibrator is
+            incompatible.
+        """
+        import joblib as _joblib
+        import os as _os
+
+        if not path:
+            raise ValueError("save path must be a non-empty string")
+
+        try:
+            # Save the model using xgb.Booster save_model, but convert to
+            # XGBClassifier for compatibility.  We save the model JSON and
+            # reconstruct an XGBClassifier on load.
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+                _model_json_path = tmp.name
+            self.model.save_model(_model_json_path)
+            with open(_model_json_path) as _f:
+                model_json = _f.read()
+            import os as _os2
+            _os2.unlink(_model_json_path)
+
+            # Prepare the artifact dict
+            artifact = {
+                "model_json": model_json,
+                "calibrator": self.calibrator,
+                "feature_order": list(self.feature_order),
+            }
+
+            # Write via joblib
+            dir_name = _os.path.dirname(path)
+            if dir_name:
+                _os.makedirs(dir_name, exist_ok=True)
+            _joblib.dump(artifact, path)
+        except Exception as e:
+            raise ValueError(f"Failed to save calibration result: {e}") from e
+
+    @classmethod
+    def load(cls, path: str):
+        """Load a CalibrationResult from a saved artifact file.
+
+        Validates that the artifact contains a valid model JSON, a
+        callable isotonic calibrator, and a non-empty feature order list.
+
+        Parameters
+        ----------
+        path : str
+            Path to the artifact file (``*.joblib`` extension recommended).
+
+        Returns
+        -------
+        CalibrationResult
+            A new CalibrationResult instance.
+
+        Raises
+        ------
+        CalibrationError
+            If the path does not exist, the file is corrupted, or the artifact
+            contains incompatible data (wrong model format, missing fields,
+            mismatched feature order).
+        """
+        import joblib as _joblib
+        import os as _os
+
+        if not path:
+            raise ValueError("load path must be a non-empty string")
+
+        if not _os.path.isfile(path):
+            raise ValueError(f"Calibration artifact not found: {path}")
+
+        try:
+            artifact = _joblib.load(path)
+        except Exception as e:
+            raise ValueError(f"Failed to load calibration artifact: {e}") from e
+
+        # Validate structure
+        if not isinstance(artifact, dict):
+            raise ValueError(
+                f"Calibration artifact is not a dict; got {type(artifact)}"
+            )
+
+        missing = []
+        if "model_json" not in artifact:
+            missing.append("model_json")
+        if "calibrator" not in artifact:
+            missing.append("calibrator")
+        if "feature_order" not in artifact:
+            missing.append("feature_order")
+
+        if missing:
+            raise ValueError(
+                f"Calibration artifact missing fields: {', '.join(missing)}"
+            )
+
+        # Validate model JSON – must be a non-empty string
+        model_json = artifact["model_json"]
+        if not isinstance(model_json, str) or not model_json.strip():
+            raise ValueError("Artifact 'model_json' must be a non-empty string")
+
+        # Validate calibrator – must be an IsotonicRegression instance
+        from sklearn.isotonic import IsotonicRegression
+        calibrator = artifact["calibrator"]
+        if not isinstance(calibrator, IsotonicRegression):
+            raise ValueError(
+                f"Artifact 'calibrator' is not an IsotonicRegression instance; "
+                f"got {type(calibrator)}"
+            )
+
+        # Validate feature_order – must be a non-empty list of strings
+        feature_order = artifact["feature_order"]
+        if not isinstance(feature_order, list) or not feature_order:
+            raise ValueError(
+                f"Artifact 'feature_order' must be a non-empty list; got {type(feature_order)}"
+            )
+        if not all(isinstance(k, str) for k in feature_order):
+            raise ValueError(
+                f"Artifact 'feature_order' must contain only strings; got {feature_order}"
+            )
+
+        # Validate feature_order – must match FEATURE_ORDER exactly
+        from features import FEATURE_ORDER
+        if feature_order != FEATURE_ORDER:
+            raise ValueError(
+                f"Artifact 'feature_order' must match FEATURE_ORDER exactly. "
+                f"Got: {feature_order}\nExpected: {FEATURE_ORDER}"
+            )
+
+        # Reconstruct the model from JSON using XGBClassifier
+        import xgboost as xgb
+        import tempfile
+        import os as _os2
+
+        model_json = artifact["model_json"]
+        with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False, encoding="utf-8") as tmp:
+            tmp.write(model_json)
+            tmp_path = tmp.name
+        try:
+            model = xgb.XGBClassifier(n_estimators=10, base_score=0.5)
+            model.load_model(tmp_path)
+        finally:
+            _os2.unlink(tmp_path)
+
+        # Build and return the result
+        result = cls(model, artifact["calibrator"], feature_order=artifact["feature_order"])
+        return result
+
 
 # ---------------------------------------------------------------------------
 # Core calibration function
@@ -241,7 +405,7 @@ def _test_calibration_basic():
     n = 200
     X = np.random.rand(n, len(FEATURE_ORDER))
     y = np.random.randint(0, 2, n)
-    model = xgb.XGBClassifier(n_estimators=10, random_state=42)
+    model = xgb.XGBClassifier(n_estimators=10, random_state=42, base_score=0.5)
     model.fit(X[:150], y[:150])
 
     # Hold-out split (first 150 train, last 50 calibrate)
@@ -273,7 +437,7 @@ def _test_calibration_feature_alignment():
     n = 100
     X = np.random.rand(n, len(FEATURE_ORDER))
     y = np.random.randint(0, 2, n)
-    model = xgb.XGBClassifier(n_estimators=10, random_state=42)
+    model = xgb.XGBClassifier(n_estimators=10, random_state=42, base_score=0.5)
     model.fit(X[:80], y[:80])
 
     # Hold-out: last 20 rows
@@ -306,7 +470,7 @@ def _test_calibration_range():
     n = 100
     X = np.random.rand(n, len(FEATURE_ORDER))
     y = np.random.randint(0, 2, n)
-    model = xgb.XGBClassifier(n_estimators=10, random_state=42)
+    model = xgb.XGBClassifier(n_estimators=10, random_state=42, base_score=0.5)
     model.fit(X[:70], y[:70])
 
     # 70% train, 30% calibrate
@@ -332,7 +496,7 @@ def _test_calibration_data_separation():
     n = 150
     X = np.random.rand(n, len(FEATURE_ORDER))
     y = np.random.randint(0, 2, n)
-    model = xgb.XGBClassifier(n_estimators=10, random_state=42)
+    model = xgb.XGBClassifier(n_estimators=10, random_state=42, base_score=0.5)
     model.fit(X[:100], y[:100])
 
     # Hold-out: last 30 rows
@@ -353,6 +517,102 @@ def _test_calibration_data_separation():
     print("  DATA SEPARATION TEST PASSED")
 
 
+def _test_calibration_save_load():
+    """Fit a model, calibrate, save, reload, and verify calibrated scores."""
+    import numpy as np
+    import xgboost as xgb
+    from calibrate import calibrate, CalibrationResult
+    import joblib
+    import os
+
+    np.random.seed(42)
+    n = 200
+    X = np.random.rand(n, len(FEATURE_ORDER))
+    y = np.random.randint(0, 2, n)
+    model = xgb.XGBClassifier(n_estimators=10, random_state=42, base_score=0.5)
+    model.fit(X[:150], y[:150])
+
+    # Hold-out split
+    result = calibrate(model, X[150:], y[150:])
+
+    # Save the calibration result
+    tmp_path = "/tmp/test_calibrate_result.joblib"
+    result.save(tmp_path)
+
+    # Load it back
+    loaded = CalibrationResult.load(tmp_path)
+
+    # Verify calibrated scores match within floating-point tolerance
+    flow = {k: float(np.random.rand()) for k in loaded.feature_order}
+    orig_score = result.calibrated_score(flow)
+    loaded_score = loaded.calibrated_score(flow)
+    assert abs(orig_score - loaded_score) < 1e-6, (
+        f"Scores differ after save/load: {orig_score} vs {loaded_score}"
+    )
+
+    # Clean up
+    try:
+        os.unlink(tmp_path)
+    except OSError:
+        pass
+
+    print("  SAVE/LOAD TEST PASSED")
+
+
+def _test_calibration_save_missing_file():
+    """Test that loading a missing artifact file raises a clear error."""
+    import os
+
+    try:
+        CalibrationResult.load("/tmp/nonexistent_calibration_result.joblib")
+        assert False, "Expected ValueError for missing file"
+    except ValueError as e:
+        assert "not found" in str(e).lower() or "not exist" in str(e).lower()
+
+    print("  MISSING FILE TEST PASSED")
+
+
+def _test_calibration_save_incompatible_feature_order():
+    """Test that loading an artifact with incompatible feature order raises an error."""
+    import joblib
+    import numpy as np
+    import xgboost as xgb
+    from calibrate import calibrate, CalibrationResult
+
+    np.random.seed(42)
+    n = 200
+    X = np.random.rand(n, len(FEATURE_ORDER))
+    y = np.random.randint(0, 2, n)
+    model = xgb.XGBClassifier(n_estimators=10, random_state=42, base_score=0.5)
+    model.fit(X[:150], y[:150])
+
+    result = calibrate(model, X[150:], y[150:])
+
+    # Save normally
+    tmp_path = "/tmp/test_incompatible.joblib"
+    result.save(tmp_path)
+
+    # Corrupt the feature order in the saved artifact
+    artifact = joblib.load(tmp_path)
+    artifact["feature_order"] = ["nonexistent_feature"]  # invalid
+    joblib.dump(artifact, tmp_path)
+
+    # Loading should fail
+    try:
+        CalibrationResult.load(tmp_path)
+        assert False, "Expected ValueError for incompatible feature order"
+    except ValueError as e:
+        assert "feature_order" in str(e).lower()
+
+    # Clean up
+    try:
+        os.unlink(tmp_path)
+    except OSError:
+        pass
+
+    print("  INCOMPATIBLE FEATURE ORDER TEST PASSED")
+
+
 # ---------------------------------------------------------------------------
 # Allow running as: python -m m3_scoring.calibrate  (runs the smoke tests)
 # ---------------------------------------------------------------------------
@@ -370,7 +630,7 @@ if __name__ == "__main__":
     n = 200
     X = np.random.rand(n, len(FEATURE_ORDER))
     y = np.random.randint(0, 2, n)
-    model = xgb.XGBClassifier(n_estimators=10, random_state=42)
+    model = xgb.XGBClassifier(n_estimators=10, random_state=42, base_score=0.5)
     model.fit(X[:150], y[:150])
 
     X_cal = X[150:]
