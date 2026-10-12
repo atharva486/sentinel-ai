@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -6,15 +6,15 @@ from typing import Dict
 
 import pandas as pd
 
-from features import WindowTracker, build_features
-from sensor import parse_http
+from .features import WindowTracker, build_features
+from .sensor import parse_http
 
 
 # Source IP -> role. Primary container IPs are PINNED in docker-compose.yaml
 # (lab subnet 172.18.0.0/16). When generators bind each worker to its own
 # source IP (gen/generate.py --ip-base), those IPs fall in per-container pools
 # labelled by PREFIX below. An IP matching nothing is dropped (role None ->
-# unlabelled), so an unlisted pool silently loses data — keep these in sync.
+# unlabelled), so an unlisted pool silently loses data â€” keep these in sync.
 CONTAINER_ROLE: Dict[str, str] = {
     "172.18.0.5": "benign",   # legit-loadgen (primary)
     "172.18.0.6": "attack",   # slow-gen  (slowloris / rudy)

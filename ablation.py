@@ -29,7 +29,7 @@ from dataclasses import asdict, dataclass
 from mechanism import (CONN_LIMIT, RATE_LIMIT, Mechanism, Policy,
                        choose_by_shap_group, choose_by_shap_top1,
                        choose_by_trigger, choose_static, contains)
-from features import group_of
+from m1_capture.features import group_of
 
 
 # ---------------------------------------------------------------------------

@@ -82,7 +82,8 @@ def _gt_header(gt_label: str) -> bytes:
 # ---------------------------------------------------------------------------
 async def benign_worker(agent: int, duration: int, think_lo: float,
                         think_hi: float, slow_fraction: float = 0.15,
-                        stagger: float = 0.0, src_ip: str | None = None):
+                        stagger: float = 0.0, src_ip: str | None = None,
+                        stats: dict | None = None):
     """A realistic browser session.
 
     Reconnects periodically. A browser does NOT hold one socket open for the
@@ -94,6 +95,11 @@ async def benign_worker(agent: int, duration: int, think_lo: float,
     negative. Without it, the stall detector will flag every large upload and
     the false-positive rate in the report will be fiction.
     """
+    if stats is None:
+        stats = {"connections_attempted": 0, "connections_succeeded": 0,
+                 "connections_failed": 0, "requests_attempted": 0,
+                 "requests_completed": 0, "requests_failed": 0,
+                 "exceptions": []}
     end = time.time() + duration
     if stagger > 0:
         await asyncio.sleep(random.uniform(0.0, stagger))
@@ -101,7 +107,17 @@ async def benign_worker(agent: int, duration: int, think_lo: float,
     gt_header = _gt_header("benign")
 
     while time.time() < end:
-        reader, writer = await _connect(src_ip)
+        # Connection attempt
+        stats["connections_attempted"] = stats.get("connections_attempted", 0) + 1
+        try:
+            reader, writer = await _connect(src_ip)
+            stats["connections_succeeded"] = stats.get("connections_succeeded", 0) + 1
+        except Exception as e:
+            stats["connections_failed"] = stats.get("connections_failed", 0) + 1
+            stats["exceptions"].append(f"agent={agent} connect: {type(e).__name__}: {e}")
+            await asyncio.sleep(1.0)  # Back off before retry
+            continue
+
         for _ in range(random.randint(1, 3)):
             if time.time() >= end:
                 break
@@ -116,27 +132,46 @@ async def benign_worker(agent: int, duration: int, think_lo: float,
                     f"Content-Type: multipart/form-data\r\n").encode()
             head += gt_header + b"\r\n"
 
-            if slow:
-                # the nasty case: a genuinely slow client that DOES finish
-                writer.write(head)
-                await writer.drain()
-                chunk = b"x" * 8192
-                sent = 0
-                while sent < body_len and time.time() < end:
-                    writer.write(chunk)
-                    await writer.drain()
-                    sent += len(chunk)
-                    await asyncio.sleep(random.uniform(0.3, 0.9))
-            else:
-                body = b"x" * body_len if body_len else b""
-                writer.write(head + body)
-                await writer.drain()
-
-            # read the response so keep-alive stays alive
+            stats["requests_attempted"] = stats.get("requests_attempted", 0) + 1
             try:
-                await asyncio.wait_for(reader.read(4096), timeout=10)
-            except asyncio.TimeoutError:
-                pass
+                if slow:
+                    # the nasty case: a genuinely slow client that DOES finish
+                    writer.write(head)
+                    await writer.drain()
+                    chunk = b"x" * 8192
+                    sent = 0
+                    while sent < body_len and time.time() < end:
+                        writer.write(chunk)
+                        try:
+                            await writer.drain()
+                        except ConnectionResetError as e:
+                            stats["requests_failed"] = stats.get("requests_failed", 0) + 1
+                            stats["exceptions"].append(f"agent={agent} send_body: ConnectionResetError: {e}")
+                            raise
+                        sent += len(chunk)
+                        await asyncio.sleep(random.uniform(0.3, 0.9))
+                else:
+                    body = b"x" * body_len if body_len else b""
+                    writer.write(head + body)
+                    await writer.drain()
+
+                # read the response so keep-alive stays alive
+                try:
+                    await asyncio.wait_for(reader.read(4096), timeout=30)
+                except asyncio.TimeoutError:
+                    stats["exceptions"].append(f"agent={agent} response_read_timeout")
+                    pass
+
+                stats["requests_completed"] = stats.get("requests_completed", 0) + 1
+            except ConnectionResetError as e:
+                stats["requests_failed"] = stats.get("requests_failed", 0) + 1
+                if "send_body" not in stats["exceptions"][-1] if stats["exceptions"] else True:
+                    stats["exceptions"].append(f"agent={agent} request: ConnectionResetError: {e}")
+                break  # Abort this connection on request failure
+            except Exception as e:
+                stats["requests_failed"] = stats.get("requests_failed", 0) + 1
+                stats["exceptions"].append(f"agent={agent} request: {type(e).__name__}: {e}")
+                break  # Abort this connection on request failure
 
             await asyncio.sleep(random.uniform(think_lo, think_hi))
 
@@ -309,12 +344,37 @@ async def run_benign_only(duration: int, n_benign: int, label: str,
     """
     if stagger is None:
         stagger = duration * 0.6
+    stats_list = [{"connections_attempted": 0, "connections_succeeded": 0,
+                   "connections_failed": 0, "requests_attempted": 0,
+                   "requests_completed": 0, "requests_failed": 0,
+                   "exceptions": []} for _ in range(n_benign)]
     tasks = [benign_worker(i, duration, 0.2, 2.0, stagger=stagger,
-                           src_ip=_ip_for(i))
+                           src_ip=_ip_for(i), stats=stats_list[i])
              for i in range(n_benign)]
     print(f"[{label}] benign only: {n_benign} agents, {duration}s "
           f"(this run gives the FPR)")
     await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Aggregate and print stats
+    total = {"connections_attempted": 0, "connections_succeeded": 0,
+             "connections_failed": 0, "requests_attempted": 0,
+             "requests_completed": 0, "requests_failed": 0,
+             "exceptions": []}
+    for s in stats_list:
+        for k in ["connections_attempted", "connections_succeeded", "connections_failed",
+                  "requests_attempted", "requests_completed", "requests_failed"]:
+            total[k] += s.get(k, 0)
+        total["exceptions"].extend(s.get("exceptions", []))
+
+    print(f"[{label}] STATS: connections={total['connections_succeeded']}/{total['connections_attempted']} "
+          f"failed={total['connections_failed']}, requests={total['requests_completed']}/{total['requests_attempted']} "
+          f"failed={total['requests_failed']}")
+    if total["exceptions"]:
+        print(f"[{label}] EXCEPTIONS ({len(total['exceptions'])}):")
+        for exc in total["exceptions"][:10]:  # Print first 10
+            print(f"  {exc}")
+        if len(total["exceptions"]) > 10:
+            print(f"  ... and {len(total['exceptions']) - 10} more")
 
 
 # ---------------------------------------------------------------------------

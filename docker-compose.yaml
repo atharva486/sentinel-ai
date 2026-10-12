@@ -17,7 +17,9 @@ services:
         ipv4_address: 172.18.0.2
 
   backend:
-    image: nginx:1.25-alpine
+    build:
+      context: ./proxy
+      dockerfile: backend.Dockerfile
     container_name: backend
     networks:
       lab:

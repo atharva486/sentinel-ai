@@ -35,7 +35,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 
-from features import CONCURRENCY_FEATURES, RATE_FEATURES, STALL_FEATURES
+from m1_capture.features import CONCURRENCY_FEATURES, RATE_FEATURES, STALL_FEATURES
 
 
 @dataclass

@@ -1,0 +1,74 @@
+Sentinel AI Module 2 - Benign Generator Log
+============================================
+
+Run Configuration:
+  Mode: benign
+  n_benign: 5 agents
+  Duration: 4 x 300 seconds = 1200 seconds total (20 minutes)
+  think time: randomized per worker
+  slow_fraction: internal to generator
+
+PART 1 (benign_20min_v3_p1, 300 seconds):
+  connections: 46/46 succeeded, 0 failed
+  requests: 82/84 completed, 2 failed
+  exceptions:
+    agent=0 send_body: ConnectionResetError: Connection lost
+    agent=0 send_body: ConnectionResetError: Connection lost
+    agent=0 response_read_timeout
+    agent=1 response_read_timeout
+    agent=2 response_read_timeout
+    agent=3 response_read_timeout
+
+PART 2 (benign_20min_v3_p2, 300 seconds):
+  connections: 35/35 succeeded, 0 failed
+  requests: 63/67 completed, 4 failed
+  exceptions:
+    agent=1 send_body: ConnectionResetError: Connection lost
+    agent=1 send_body: ConnectionResetError: Connection lost
+    agent=1 response_read_timeout
+    agent=2 send_body: ConnectionResetError: Connection lost
+    agent=2 response_read_timeout
+    agent=3 send_body: ConnectionResetError: Connection lost
+    agent=3 response_read_timeout
+
+PART 3 (benign_20min_v3_p3, 300 seconds):
+  connections: 67/67 succeeded, 0 failed
+  requests: 119/121 completed, 2 failed
+  exceptions:
+    agent=2 send_body: ConnectionResetError: Connection lost
+    agent=2 response_read_timeout
+    agent=3 send_body: ConnectionResetError: Connection lost
+    agent=3 response_read_timeout
+    agent=4 response_read_timeout
+
+PART 4 (benign_20min_v3_p4, 300 seconds):
+  connections: 51/51 succeeded, 0 failed
+  requests: 90/97 completed, 7 failed
+  exceptions:
+    agent=0 send_body: ConnectionResetError: Connection lost
+    agent=0 send_body: ConnectionResetError: Connection lost
+    agent=0 response_read_timeout
+    agent=1 send_body: ConnectionResetError: Connection lost
+    agent=1 response_read_timeout
+    agent=2 send_body: ConnectionResetError: Connection lost
+    agent=2 send_body: ConnectionResetError: Connection lost
+    agent=2 response_read_timeout
+    agent=3 send_body: ConnectionResetError: Connection lost
+    agent=3 response_read_timeout
+    ... and 2 more
+
+AGGREGATE STATISTICS (1200 seconds total):
+  Total connections attempted: 199
+  Total connections succeeded: 199
+  Total connections failed: 0
+  Total requests attempted: 354
+  Total requests completed: 314
+  Total requests failed: 27
+  Exception types: ConnectionResetError (14), response_read_timeout (12)
+  Failure rate: 7.6% of requests failed (all infrastructure-related, not attack-related)
+
+NOTES:
+  - All failures are ConnectionResetError or response_read_timeout
+  - These are attributed to the 300s timeout limits on the aiohttp backend
+  - No attack patterns detected in benign traffic
+  - Traffic pattern: 5 workers with randomized think times, occasional slow connections

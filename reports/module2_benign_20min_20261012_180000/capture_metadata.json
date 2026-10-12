@@ -1,0 +1,33 @@
+{
+  "pcap_file": "captures/benign_20min_v3.pcap",
+  "pcap_size_bytes": 18356225,
+  "start_timestamp": 1791810420.0,
+  "end_timestamp": 1791811980.0,
+  "actual_duration_seconds": 1560.081,
+  "actual_duration_minutes": 26.0,
+  "capture_filter": "src host 172.18.0.5 and dst host 172.18.0.2 and tcp dst port 80",
+  "interface": "eth0",
+  "packet_count": 19312,
+  "syn_count": 287,
+  "unique_flow_records": 282,
+  "closed_flows_observed": 263,
+  "still_open_at_capture_end": 19,
+  "total_flow_evaluations": 282,
+  "capture_initiation": "docker exec -d proxy tcpdump -i eth0 -nn -s 1024 -U -w /captures/benign_20min_v3.pcap 'src host 172.18.0.5 and dst host 172.18.0.2 and tcp dst port 80'",
+  "capture_termination": "docker exec proxy kill -INT $(docker exec proxy pidof tcpdump)",
+  "generator_runs": [
+    {"label": "benign_20min_v3_p1", "duration_s": 300, "connections": 46, "requests_attempted": 84, "requests_completed": 82, "exceptions": 5},
+    {"label": "benign_20min_v3_p2", "duration_s": 300, "connections": 35, "requests_attempted": 67, "requests_completed": 63, "exceptions": 7},
+    {"label": "benign_20min_v3_p3", "duration_s": 300, "connections": 67, "requests_attempted": 121, "requests_completed": 119, "exceptions": 5},
+    {"label": "benign_20min_v3_p4", "duration_s": 300, "connections": 51, "requests_attempted": 97, "requests_completed": 90, "exceptions": 12}
+  ],
+  "generator_total_connections": 199,
+  "generator_total_requests_attempted": 369,
+  "generator_total_requests_completed": 354,
+  "generator_total_requests_failed": 15,
+  "generator_total_exceptions": 29,
+  "generator_exception_breakdown": {
+    "ConnectionResetError": 14,
+    "response_read_timeout": 15
+  }
+}

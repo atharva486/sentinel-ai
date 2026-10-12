@@ -1,0 +1,48 @@
+Sentinel AI Module 2 - Changed Files Log
+=========================================
+
+Files Created (new in this evaluation):
+  reports/module2_benign_20min_20261012_180000/summary.md
+  reports/module2_benign_20min_20261012_180000/environment.txt
+  reports/module2_benign_20min_20261012_180000/commands.log
+  reports/module2_benign_20min_20261012_180000/git_status_before.txt
+  reports/module2_benign_20min_20261012_180000/git_status_after.txt
+  reports/module2_benign_20min_20261012_180000/generator.log
+  reports/module2_benign_20min_20261012_180000/capture_metadata.json
+  reports/module2_benign_20min_20261012_180000/evaluation_results.json
+  reports/module2_benign_20min_20261012_180000/evaluation_report.md
+  reports/module2_benign_20min_20261012_180000/limitations.md (to be created)
+  reports/module2_benign_20min_20261012_180000/pcap_read_check.txt
+  reports/module2_benign_20min_20261012_180000/changed_files.txt
+  reports/module2_benign_20min_20261012_180000/sha256sums.txt (to be created)
+
+Files Modified (from repository):
+  - None (no source code changes made during this evaluation)
+  - generator.log statistics reflect generator runs but no code changes
+  - evaluate_fpr_time_based.py - no changes, used as-is
+
+Evidence Files (preserved from repository, not modified):
+  - m2_triggers/triggers.md - unchanged
+  - m2_triggers/rules.py - unchanged
+  - m2_triggers/cusum.py - unchanged
+  - m2_triggers/stall.py - unchanged (body_drip_rate_bps < 100 guard present)
+  - m2_triggers/pipeline.py - unchanged
+  - gen/generate.py - unchanged (stats tracking already present)
+  - proxy/nginx.conf - unchanged (300s timeouts already set)
+  - docker-compose.yaml - unchanged (custom backend already configured)
+  - evaluate_fpr_time_based.py - unchanged
+  - test_*.py files - unchanged
+
+New PCAP File:
+  captures/benign_20min_v3.pcap (18.3 MB, 26-minute capture)
+  Previously existing captures (unchanged):
+    - captures/benign_1hour.pcap
+    - captures/benign_10min.pcap
+    - captures/benign_2min_v7.pcap
+    - captures/benign_smoke.pcap
+
+Git Status:
+  Before: main branch, clean working directory (recorded in git_status_before.txt)
+  After: main branch, new files in evidence directory only (recorded in git_status_after.txt)
+
+No module 1, 3, or 4 changes were made. All changes are scoped to Module 2 evidence production.

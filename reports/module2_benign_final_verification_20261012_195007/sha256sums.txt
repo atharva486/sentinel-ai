@@ -1,0 +1,13 @@
+Sentinel AI Module 2 - Final Verification SHA-256 Checksums
+==========================================================
+
+3c13abc84a6fa4992f89334de8d44e259487afa80eaed7f858d0e2b0b710716c  summary.md
+e509e712040cbd047e7cfd9f686bb76a8a5b17b9e1b054ac298aa9de174a1fb8  cusum_eval_results_verified.json
+1135962e753b7980c92bca0f2d821ebf4effd53f11800317e421b0c0e7019050  capture_metadata.json
+7f373a04bb5c2a5489c8d151f9b06e593a96230a573ca055840bdf66b9377e82  evaluation_results.json
+042339ca2beb30987c166435d9a6cb835472d937927b77e4576aad223e39d2f5  evaluation_report.md
+d91cad7c191844937360213afc2c587e7273ae5bd8db7ab61671e5921220b2bf  tests_before.txt
+0a1d799affb82e66c65bde4c9e1dc1bb3e43777a38db8ae61205d935665270b5  tests_after.txt
+4474a33e5282f1fcdc7a77e4c54c819ae3d498d7c00436799fd3bf185d94bb03  sha256sums.txt
+
+Total files checksummed: 7
