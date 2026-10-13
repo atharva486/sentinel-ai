@@ -58,6 +58,11 @@ RATE_FEATURES = frozenset({
     "requests_per_s",
     "interarrival_mean",
     "interarrival_std",
+    # interarrival_max is a rate-tier feature (see FEATURE_ORDER comment and the
+    # report's tier table). It was omitted from this set by mistake, so
+    # group_of("interarrival_max") returned "other" and the SHAP->mechanism
+    # switch could never attribute a max-gap-driven flow to the rate class.
+    "interarrival_max",
     "packets_per_s",
     "bytes_in",
 })
