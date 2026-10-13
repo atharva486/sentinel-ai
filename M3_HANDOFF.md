@@ -110,7 +110,6 @@ shap_values = explain(model=artifact.model, flow_features=flow_features)
 ```bash
 # Run existing test suites (must-pass prerequisites)
 python test_save_load.py        # 3/3 PASSED
-python test_persistence.py      # 3/3 PASSED
 python test_feature_order.py    # 4/4 PASSED
 
 # Run the candidate artifact integration test

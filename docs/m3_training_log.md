@@ -134,3 +134,4 @@ PYTHONPATH=m1_capture python -c "
   ...
 "
 ```
+Production artifact: calibration_result_candidate.joblib (see M3_HANDOFF.md)
