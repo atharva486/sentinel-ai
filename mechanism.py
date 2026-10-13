@@ -37,6 +37,8 @@ from dataclasses import dataclass
 
 from m1_capture.features import CONCURRENCY_FEATURES, RATE_FEATURES, STALL_FEATURES
 
+SLOW_FEATURES = STALL_FEATURES | CONCURRENCY_FEATURES
+
 
 @dataclass
 class Mechanism:
@@ -171,6 +173,11 @@ def shap_group_scores(shap_values: dict) -> dict:
 
 
 def choose_by_shap_group(shap_values: dict, score: float) -> Mechanism:
+    """Group-summed attribution: SHAP summed per feature group, winner takes all.
+    More robust than top-1 when evidence is spread across several features —
+    see test_mechanism.py for the case where top-1 flips on a tie and the sum
+    does not.
+    """
     if not shap_values:
         return choose_static(score)
     groups = shap_group_scores(shap_values)
