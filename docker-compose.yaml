@@ -63,6 +63,26 @@ services:
         ipv4_address: 172.18.0.8
     ports: ["6380:6379"]
 
+  m5:
+    build:
+      context: .
+      dockerfile: m5_sandbox/Dockerfile
+    container_name: m5_sandbox
+    environment:
+      - SANDBOX_URL=http://sandbox-backend:80
+      - PROXY_URL=http://proxy:80
+      - DETECTOR_STATE_FILE=/tmp/detector_state.json
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - .:/app
+    depends_on:
+      - proxy
+      - sandbox-backend
+      - redis
+    networks:
+      lab:
+        ipv4_address: 172.18.0.9
+
 networks:
   lab:
     driver: bridge
