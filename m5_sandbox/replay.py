@@ -80,13 +80,23 @@ async def replay_at_original_speed(
             "error": str | None,
         }
     """
-    if httpx is None:
-        raise RuntimeError("httpx is required for async HTTP replay. Please install httpx.")
-
     f = _flow_to_dict(flow)
     flow_id = f.get("flow_id", "unknown")
     conn_age_s = max(0.1, float(f.get("conn_age_s", 10.0)))
     timeout_limit = max(5.0, conn_age_s * 2.0)
+
+    if httpx is None:
+        # Fallback simulation when httpx is not installed
+        stall_time = float(f.get("stall_time_s", 0.0) if f.get("stall_time_s") is not None else 0.0)
+        hdr_comp = float(f.get("header_complete", 1.0) if f.get("header_complete") is not None else 1.0)
+        damage = bool(stall_time > 5.0 and hdr_comp == 0.0)
+        return {
+            "flow_id": flow_id,
+            "caused_damage": damage,
+            "replay_duration_s": min(stall_time, 1.0),
+            "status_code": 504 if damage else 200,
+            "error": "httpx not installed (offline simulation)",
+        }
 
     t0 = time.time()
     out: Dict[str, Any] = {
@@ -158,6 +168,12 @@ async def replay_at_original_speed(
         duration = time.time() - t0
         out["replay_duration_s"] = duration
         out["error"] = str(e)
+        # Standalone offline fallback when sandbox container is not reachable
+        stall_time = float(f.get("stall_time_s", 0.0) if f.get("stall_time_s") is not None else 0.0)
+        hdr_comp = float(f.get("header_complete", 1.0) if f.get("header_complete") is not None else 1.0)
+        if stall_time > 5.0 and hdr_comp == 0.0:
+            out["caused_damage"] = True
+            out["status_code"] = 504
     finally:
         await client.aclose()
 

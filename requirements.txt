@@ -17,3 +17,4 @@ slicer==0.0.8
 threadpoolctl==3.7.0
 tqdm==4.70.1
 xgboost==3.4.1
+httpx==0.28.1
