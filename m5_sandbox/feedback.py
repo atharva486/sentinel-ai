@@ -70,6 +70,7 @@ def extract_uncertain_flows(
 def label_from_replay(
     flows: List[Dict[str, Any]],
     sandbox_url: str = SANDBOX,
+    replay_fn: Optional[Callable[[Union[Dict[str, Any], FlowRecord]], Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """Replay uncertain flows at original speed and assign label based on damage.
 
@@ -79,6 +80,8 @@ def label_from_replay(
         Candidate uncertain flows to replay.
     sandbox_url : str
         Target sandbox URL.
+    replay_fn : callable, optional
+        Custom replay function for testing and simulation hooks.
 
     Returns
     -------
@@ -87,7 +90,10 @@ def label_from_replay(
     """
     labeled_records = []
     for fl in flows:
-        replay_res = replay_sync(fl, sandbox_url=sandbox_url)
+        if replay_fn is not None:
+            replay_res = replay_fn(fl)
+        else:
+            replay_res = replay_sync(fl, sandbox_url=sandbox_url)
         caused_damage = bool(replay_res.get("caused_damage", False))
         record = dict(fl)
         record["y"] = 1 if caused_damage else 0
@@ -186,6 +192,7 @@ def close_the_loop(
     artifact: CalibrationResult,
     n_recent: int = 200,
     sandbox_url: str = SANDBOX,
+    replay_fn: Optional[Callable[[Union[Dict[str, Any], FlowRecord]], Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Execute the full feedback loop workflow per Manual §7.2.
 
@@ -219,7 +226,7 @@ def close_the_loop(
         }
 
     # 2 & 3. Replay at original speed -> did-damage is the LABEL
-    labeled_rows = label_from_replay(uncertain, sandbox_url=sandbox_url)
+    labeled_rows = label_from_replay(uncertain, sandbox_url=sandbox_url, replay_fn=replay_fn)
 
     # 4. Retrain
     new_model, new_calibrator = retrain_with_labels(
