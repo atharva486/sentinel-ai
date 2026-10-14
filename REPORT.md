@@ -92,8 +92,8 @@ Evaluated on the held-out validation sessions (`mix1–mix3`):
 
 | Metric | Measured Result | Target |
 |---|---|---|
-| **PR-AUC (Calibrated)** | **0.8165** | > 0.80 |
-| **ROC-AUC (Calibrated)** | **0.7753** | > 0.75 |
+| **PR-AUC (Calibrated)** | **0.8131** | > 0.80 |
+| **ROC-AUC (Calibrated)** | **0.8737** | > 0.75 |
 | **Out-of-Fold CV PR-AUC** | **0.8828** | > 0.85 |
 | **FPR on Benign Traffic** | **0.00%** | < 1.00% |
 | **CPU Inference Latency** | **~7.25 ms** | < 20 ms |

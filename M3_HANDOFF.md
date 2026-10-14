@@ -22,8 +22,8 @@ This document describes the selected baseline model for Module 3, the comparison
 |---|---|
 | PR-AUC (raw scores) | **0.8115** |
 | ROC-AUC (raw scores) | **0.7546** |
-| PR-AUC (calibrated) | 0.8131 |
-| ROC-AUC (calibrated) | 0.8737 |
+PR-AUC (calibrated) | 0.8131 |
+ROC-AUC (calibrated) | 0.8737 |
 | ECE (uncalibrated) | 0.0656 |
 | **ECE (calibrated)** | **0.0054** |
 | Precision (threshold 0.5) | **1.0** |
