@@ -42,37 +42,12 @@ def group_of(name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# The policy ladders. Three rungs, hysteresis, per-entity state.
+# The policy ladders. Four rungs, hysteresis, per-entity state.
 # ---------------------------------------------------------------------------
-
-LADDER = [
-    (0.80, 0.70, "quarantine"),
-    (0.55, 0.46, "block"),
-    (0.30, 0.24, "throttle"),
-    (0.00, 0.00, "forward"),
-]
+from m4_decide.policy import LADDER, Policy
 
 CONN_LIMIT = 20        # what we apply for a stall-class attack
 RATE_LIMIT = 50        # what we apply for a rate-class attack
-
-
-class Policy:
-    """Score -> action, with hysteresis so the action cannot flap."""
-
-    def __init__(self):
-        self._state: dict[str, int] = {}
-
-    def decide(self, entity: str, score: float) -> str:
-        current = self._state.get(entity, len(LADDER) - 1)
-
-        while current > 0 and score >= LADDER[current - 1][0]:
-            current -= 1
-
-        while current < len(LADDER) - 1 and score < LADDER[current][1]:
-            current += 1
-
-        self._state[entity] = current
-        return LADDER[current][2]
 
 
 # ---------------------------------------------------------------------------
