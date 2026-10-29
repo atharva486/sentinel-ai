@@ -4,11 +4,14 @@ An explainable Layer-7 DoS detection system: packet-level flow reconstruction,
 ML scoring with SHAP, and mechanism switching (`limit_conn` for slow attacks,
 `limit_req` for flood attacks).
 
-> **Status:** Module 1 (capture + features) is complete — the final training set
+> **Status (final):** all modules are built and verified. The final training set
 > (`data/features.parquet`, 11 sessions, pure + mixed-role IPs, session-level
-> split) is ready. The model is
-> **not trained yet** — that is Module 3. Commands below are written to be
-> copy-paste exact for **macOS, Linux and Windows**.
+> split) is tracked; the model is trained and isotonic-calibrated
+> (`calibration_result_candidate.joblib`); the SHAP→mechanism switch and the
+> enforcement guard live in `mechanism.py`; `dashboard/` renders the live feed,
+> live lab, flow inspector and the A/B protection proof; and
+> `python -m pytest -q` passes **53/53**. Commands below stay copy-paste exact
+> for **macOS, Linux and Windows**.
 
 ---
 
@@ -19,7 +22,7 @@ ML scoring with SHAP, and mechanism switching (`limit_conn` for slow attacks,
 | **Python** | **3.12.13** (any **3.12.x**) | `shap==0.52.0` requires **Python ≥ 3.12**. 3.9 / 3.10 / 3.11 **fail** at `pip install`. |
 | pip | bundled with 3.12 | — |
 | Git | any recent | to clone |
-| Docker + Compose v2 | current | **only** for the live lab (section 7) |
+| Docker + Compose v2 | current | **only** for the live lab (section 9) |
 
 > ⚠️ **Never use a bare `python3` without checking it.**
 > A fresh macOS ships ~3.9 and Ubuntu 22.04 ships 3.10 — both are too old and
@@ -37,19 +40,29 @@ l7-dos-defender/
 │   ├── merge.py           #   flows.jsonl -> labelled frame (per-flow X-Ground-Truth header, IP fallback)
 │   ├── splits.py          #   session-level chronological split (refuses a one-class split)
 │   └── dataset_report.py  #   one-command dataset health check (balance / separation / leaks)
+├── m2_triggers/           # Module 2 — cheap triggers (CUSUM, stall, counters)
+├── m3_scoring/            # Module 3 — XGBoost train / isotonic calibration / SHAP
+├── m5_sandbox/            # Module 5 — replay, feedback loop, adversarial evasion
+├── dashboard/             # 7-tab interactive dashboard (Streamlit)
 ├── gen/                   # Traffic generators (benign / slow / rudy / flood)
-├── proxy/                 # Nginx config + limits (Module 4 writes the limits)
-├── data/                  # Raw CIC-IDS2017 (audit evidence); lab captures (gitignored)
+├── proxy/                 # Nginx config + limits (mechanism.py / live_lab.py write the limits)
+├── data/                  # Tracked features.parquet + raw CIC-IDS2017 audit evidence
 ├── captures/              # PCAP captures (gitignored)
 ├── logs/                  # Nginx logs (gitignored)
+├── docs/                  # Mechanism finding, deployment notes, M3 training log
+├── reports/               # A/B proof + live-lab runtime files (runtime files gitignored)
 ├── schemas.py             # Shared data contracts (FROZEN after week 1)
-├── mechanism.py           # SHAP -> enforcement switch
+├── mechanism.py           # SHAP -> enforcement switch + profile guard
 ├── ablation.py            # 5-policy comparison harness
 ├── test_sensor.py         # sensor + features tests
 ├── test_mechanism.py      # switch / hysteresis tests
 ├── docker-compose.yaml
 ├── requirements.txt
 ├── DATA_CARD.md
+├── MODEL_CARD.md
+├── M1_SUMMARY.md
+├── M3_HANDOFF.md
+├── REPORT.md
 ├── AUTHORISATION.md
 └── README.md
 ```
@@ -212,8 +225,9 @@ Optional — reproduce the CIC-IDS2017 audit table (read-only, writes nothing):
 python m1_capture/dataset.py
 ```
 
-If both tests pass, your baseline works. **The model is not trained yet** — that is
-Module 3's job (section 10).
+If both tests pass, your baseline works. The trained + calibrated artifact is
+`calibration_result_candidate.joblib`; reproduce it with the commands in
+`docs/m3_training_log.md`.
 
 ---
 
@@ -252,11 +266,11 @@ Module 3's job (section 10).
 > and merge code cannot be verified (`campaign_v1` is three sub-runs glued into
 > one "session", which breaks leave-one-session-out). See DATA_CARD.
 
-> **Do M2/M3/M4 need Docker? No.** The lab (Docker + Compose) is only needed to
-> *regenerate captures* (Module 1). Everyone else just needs Python 3.12,
-> `requirements.txt`, and `data/features.parquet` (+ `splits.py` /
-> `dataset_report.py`). Nothing in the model / mechanism / report code touches
-> Docker.
+> **Do M2/M3/M5 need Docker? No.** The lab (Docker + Compose) is only needed to
+> *regenerate captures* (Module 1) or run the real-packet tabs
+> (`dashboard/live_lab.py`, `dashboard/protect_demo.py`). The model, mechanism,
+> report and replay code only need Python 3.12, `requirements.txt`, and
+> `data/features.parquet` (+ `splits.py` / `dataset_report.py`).
 
 Raw captures are deleted after processing; only the feature parquets are kept
 (they are the ground truth for this project). CIC-IDS2017 stays raw on disk as
@@ -284,7 +298,7 @@ label with merge.py  ->  data/features.parquet
 python m1_capture/splits.py data/features.parquet
         │
         ▼
-   (training — Module 3, not built yet)
+   m3_scoring/train_xgb.py + m3_scoring/calibrate.py (see docs/m3_training_log.md)
 ```
 
 ### Build the dataset — capture recipe
@@ -458,23 +472,52 @@ Expected: `header_complete = 0.0` and `stall_time_s` greater than ~10.
 
 ---
 
-## 10. What is NOT built yet (so nobody is surprised)
+## Dashboard (interactive)
 
-- **No trainer.** There is no `fit()` anywhere in the repo. Training is Module 3.
-  The final lab set is deliberately attack-heavy (1517 attack / 3820 benign rows)
-  so the model has positives; when the owner builds the trainer they should
-  still weight classes (or subsample) and report per-class recall + FPR.
-- **No trained model / real SHAP.** `mechanism.py` currently runs on hand-assigned
-  *fixture* scores, not a model.
-- **Missing module folders** (`m2_triggers/`, `m3_scoring/`, `m4_decide/`,
-  `m5_sandbox/`, `results/`) — left for their owners to create.
+`dashboard/app.py` is a Streamlit front end over the shipped artifacts. It has
+seven tabs: **Live monitor** (replays the 5,337 real captured flows through the
+shipped model), **Live lab** (real packets via Docker), **Protect a site**
+(A/B proof), **System flow**, **Flow inspector**, **Adversarial**, and
+**Model & results**.
+
+```bash
+pip install -r dashboard/requirements.txt
+streamlit run dashboard/app.py
+```
+
+The real-packet tabs need Docker; the replay tabs run without it. See
+`dashboard/README.md` for the full run and deploy instructions. The reference
+public demo tunnels Streamlit through an ngrok free static domain; Streamlit
+Community Cloud is the alternative documented there.
+
+---
+
+## 10. Current status and known limits
+
+- **Built and verified:** M1 dataset; M2 triggers; M3 training + isotonic
+  calibration + SHAP; the SHAP→mechanism switch and profile guard
+  (`mechanism.py`); the M5 replay / feedback / adversarial sandbox; and the
+  `dashboard/` (7 tabs). `python -m pytest -q` → **53 passed**.
+- **Shipped model:** `calibration_result_candidate.joblib` (XGBoost +
+  IsotonicRegression + `FEATURE_ORDER`). The original
+  `calibration_result.joblib` is kept unchanged for comparison — see
+  `M3_HANDOFF.md`.
+- **Reproducibility caveat:** the joblib artifact was pickled with
+  scikit-learn **1.7.0**, while `requirements.txt` pins **1.9.1**. Loading emits
+  `InconsistentVersionWarning`; re-pickle with 1.9.1 (or pin 1.7.0) before
+  claiming bit-exact reproduction.
+- **A/B protection proof:** `reports/protection_proof.json` — flood served
+  **100.0 % → 20.3 %**, rejected **79.7 %** (429), benign rejected **0.0 %**.
+  Verdict: `attack_suppressed: true`, `benign_preserved: true`.
 - **Container IPs are pinned** in `docker-compose.yaml` and mirrored in
   `merge.py`'s `CONTAINER_ROLE`. If the two ever disagree, flows are silently
   dropped (unlabelled), so change them together.
-- **Dataset is final for M2–M4.** `data/features.parquet` has a `session`
+- **Dataset is final for M2–M5.** `data/features.parquet` has a `session`
   column (leave-one-session-out), 16 model features (FEATURE_ORDER), and a
   session-level split. Regenerate a new session only if a feature change makes
   it necessary — then re-run `m1_capture/dataset_report.py`.
+- **Not committed as of 27 Oct 2026** — the repository owner commits and pushes
+  the final branch.
 
 ---
 
@@ -486,11 +529,13 @@ Expected: `header_complete = 0.0` and `stall_time_s` greater than ~10.
 | `ModuleNotFoundError: No module named 'sensor'` | `PYTHONPATH` not set | Run section 7, then rerun |
 | `cd: no such file or directory: l7-dos-defender` | Clone omitted the folder name | Re-clone with the trailing `l7-dos-defender` (section 4) |
 | `docker: command not found` / `docker compose` missing | Docker / Compose v2 not installed | Section 9 |
-| Tests pass but nothing else runs | Expected — only Module 1 exists | See section 10 |
+| Dashboard won't start | Streamlit deps not installed | `pip install -r dashboard/requirements.txt`; see `dashboard/README.md` |
 
 ---
 
 ## Notes
-- Never demo on `127.0.0.1`. Use the Docker bridge network (`lab`, `172.18.0.x`).
+- Never **capture lab traffic** on `127.0.0.1`. Use the Docker bridge network
+  (`lab`, `172.18.0.x`). The dashboard may bind `localhost` and be exposed
+  through a tunnel for a public demo.
 - `schemas.py` is frozen after Week 1 — agree changes with the whole team first.
 - Nginx logs miss slow attacks; we use packet-level reconstruction on purpose.

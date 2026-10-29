@@ -9,7 +9,7 @@ packaging==26.3
 pandas==3.0.6
 python-dateutil==2.9.0.post0
 redis==8.1.0
-scikit-learn==1.9.1
+scikit-learn==1.7.0
 scipy==1.18.1
 shap==0.52.0
 six==1.17.0

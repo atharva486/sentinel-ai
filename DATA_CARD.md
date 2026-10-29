@@ -71,10 +71,14 @@ other agents or older code is excluded below and gitignored; nothing is deleted.
   **val 1142** (845 benign / 297 attack) = mix1+mix2+mix3; both classes on both
   sides. The natural chronological cut puts all mixed sessions in val, so this
   is a pure→mixed **generalisation** test (model never trains on a mixed IP).
+  Module 3 further splits the pure block for training/calibration:
+  **train 1,328** (2b+3b+4c) and **calibration 2,867** (6d–6h), leaving the
+  1,142 mixed rows untouched as the final test set (`data/X_{train,cal,val}.csv`).
 - Class means: `header_complete` **0.39 attack vs 1.00 benign**;
   `stall_time_s` **42.3 vs 4.1**; `requests_per_s` **917 vs 1.1** (flood-driven);
   `concurrent_conns` **attack median 7 / p90 14 vs benign median 0 / p90 1**
-  (>2 conns: **52.8% vs 0.1%**) — the `limit_conn` tier is live (slowloris/rudy
+  (>2 conns: **52.8% vs 0.08%**; `dataset_report.py` rounds the benign side to
+  0.1%) — the `limit_conn` tier is live (slowloris/rudy
   share a few IPs, each bot holds many sockets; benign flows of mixed IPs barely
   raise the benign side because a browser still opens one socket at a time)
 - Leakage status:

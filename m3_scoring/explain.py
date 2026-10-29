@@ -3,7 +3,7 @@
 
 Manual §5.5 requirement:
   Return the FULL {feature: shap_value} mapping, not a top-k list.
-  Why this changed: Module 4's group-sum ablation needs to sum SHAP over
+  Why this changed: the group-sum ablation needs to sum SHAP over
   every feature in each group. Passing only top-k made that impossible —
   the ablation could not be run at all.
 

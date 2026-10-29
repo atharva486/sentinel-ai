@@ -1,0 +1,64 @@
+{
+  "generated": 1792131901.7570755,
+  "mode": "flood",
+  "duration_per_phase_s": 40,
+  "ip_count": 22,
+  "req_per_conn": 200,
+  "backstop": true,
+  "source": "logs/flow.log (nginx access log)",
+  "baseline": {
+    "benign": {
+      "requests": 145,
+      "pct_2xx": 86.2,
+      "pct_429": 0.0,
+      "pct_5xx": 0.0,
+      "p50_ms": 5.0,
+      "p95_ms": 21078.0
+    },
+    "slow": {
+      "requests": 0
+    },
+    "flood": {
+      "requests": 22000,
+      "pct_2xx": 100.0,
+      "pct_429": 0.0,
+      "pct_5xx": 0.0,
+      "p50_ms": 2.0,
+      "p95_ms": 8.0
+    }
+  },
+  "defended": {
+    "benign": {
+      "requests": 187,
+      "pct_2xx": 89.3,
+      "pct_429": 0.0,
+      "pct_5xx": 0.0,
+      "p50_ms": 2.0,
+      "p95_ms": 34058.0
+    },
+    "slow": {
+      "requests": 0
+    },
+    "flood": {
+      "requests": 21018,
+      "pct_2xx": 20.3,
+      "pct_429": 79.7,
+      "pct_5xx": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 5.0
+    }
+  },
+  "verdict": {
+    "attack_class": "flood",
+    "attack_served_baseline_pct": 100.0,
+    "attack_served_defended_pct": 20.3,
+    "attack_429_defended_pct": 79.7,
+    "benign_served_baseline_pct": 86.2,
+    "benign_served_defended_pct": 89.3,
+    "benign_429_defended_pct": 0.0,
+    "attack_requests_baseline": 22000,
+    "attack_requests_defended": 21018,
+    "attack_suppressed": true,
+    "benign_preserved": true
+  }
+}

@@ -1,6 +1,11 @@
 Sentinel AI Module 2 - Benign Evaluation Summary
 ================================================
 
+> **Historical snapshot.** Superseded by `FINAL_VERIFICATION_RESPONSE.md` for
+> the CUSUM result (114 alerts on a separate calibration capture) and the
+> generator-exception count (29, not 27). The original evidence package is kept
+> unchanged.
+
 ## A. Run Status
 - **Success**: Partial success — 20-minute benign evaluation completed with evidence package
 - **Actual duration**: 26 minutes (1560.081 seconds) of captured benign traffic

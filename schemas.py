@@ -74,7 +74,7 @@ class ScoreObject:
 
 @dataclass(frozen=True)
 class ActionObject:
-    """Module 4 produces these. This is what actually gets enforced."""
+    """The decision layer (`mechanism.py`) produces these. This is what actually gets enforced."""
     flow_id: str
     entity_key: str
     action: str

@@ -15,16 +15,16 @@
 110 entities appear in both model-training and calibration partitions. This is **unavoidable** because 350 of 910 total entities span multiple sessions across the full dataset. The overlap is not from splitting rows within a session — the requirement "do not split rows from the same session across model-training and calibration partitions" is fully satisfied. All rows from each whole session remain on one side of the boundary.
 
 ### Timestamp Ordering
-- Model training span: `t` from 1,791,625,470.14 to 1,791,634,589.18
-- Calibration span: `t` from 1,791,636,328.72 to 1,791,636,974.32
+- Model training span: `t` from 1,791,625,470.14 to 1,791,629,294.94
+- Calibration span: `t` from 1,791,633,677.54 to 1,791,634,589.18
 - Validation span: `t` from 1,791,636,328.72 to 1,791,636,974.32
-- **Train max < Calibration min**: time leak is strictly prevented.
+- **Train max < Calibration min < Validation min**: time leak is strictly prevented.
 
 ### Label Provenance
 - `y = (role == 'attack').astype(int)` derived from `role` column
 - `role` assigned via ground-truth HTTP `X-Ground-Truth` header (primary) or source IP mapping (fallback)
 - **No feature uses the label or attack_type** — all 16 features computed from raw flow data only
-- 13 forbidden columns explicitly excluded (status_code, total_bytes, is_attack, attack_type, response_time, total_bytes, requests_per_conn, fan_out, header_length, and others) due to leakage risk
+- 8 forbidden columns explicitly excluded (`status_code`, `is_attack`, `attack_type`, `response_time`, `total_bytes`, `requests_per_conn`, `fan_out`, `header_length`) — the same set enforced in `train_xgb.py` and `calibrate.py`
 
 ## Model Configuration
 
@@ -62,12 +62,21 @@
 - PR-AUC slightly decreases after calibration (0.8365 → 0.8131), which is expected when calibrated probabilities shift away from the original model's implicit operating point.
 - **Threshold 0.5 was defined beforehand** (not tuned on the final validation set). It was selected from the training-side analysis.
 
+> **Reproduction note (27 Oct 2026).** The table above is the training-time
+> measurement (scikit-learn 1.7.0). Re-loading the shipped
+> `calibration_result_candidate.joblib` under the pinned 1.9.1 environment gives
+> **PR-AUC 0.8159, ROC-AUC 0.8510, ECE 0.0055** (raw: 0.8255 / 0.7984 / 0.0656),
+> confusion at 0.5 = **TP 222 / FP 0 / FN 75 / TN 845**. The difference is the
+> known sklearn pickle-version mismatch; the dashboard's **Model & results** tab
+> computes and shows the 1.9.1 values live. Re-pickle with 1.9.1 (or pin 1.7.0)
+> before claiming bit-exact reproduction.
+
 ## Artifacts
 
 | Artifact | Path | Description |
 |---|---|---|
 | XGBoost model (raw) | `m3_scoring/` | Trained via `train()` in `train_xgb.py`, 400 estimators |
-| CalibrationResult (joblib) | `calibration_result.joblib` | Holds model JSON, IsotonicRegression calibrator, FEATURE_ORDER; save/load verified with score preservation (diff < 1e-6) |
+| CalibrationResult (joblib) | `calibration_result_candidate.joblib` | Shipped artifact: model JSON, IsotonicRegression calibrator, FEATURE_ORDER; save/load verified with score preservation (diff < 1e-6). The original `calibration_result.joblib` is kept unchanged for comparison. |
 | Model training partition CSV | `data/X_train.csv` | 1,328 rows, 16 features, sessions 2b–4c |
 | Training labels | `data/y_train.csv` | 1,328 labels (0/1) |
 | Calibration partition CSV | `data/X_cal.csv` | 2,867 rows, 16 features, sessions 6d–6h |
@@ -102,7 +111,7 @@ Despite range overlap, the distributions are well-separated by median (2.6 vs 60
 - Only 11 sessions available; a true 3-way chronological split (train/cal/test) with both classes in all partitions is **not feasible** without class distribution compromise
 - 350 of 910 entities span multiple sessions; entity overlap between model-train and calibration is unavoidable but does not violate the "no row-splitting-within-session" requirement
 - Features are expressive for lab-generated traffic; real-WAN deployment would require re-enabling 4 currently-omitted features that are constant on lab network
-- Calibration improvement (ECE 0.0656 → 0.0054) is validated only on this dataset; real-traffic calibration performance may differ substantially
+- Calibration improvement (ECE 0.0656 → 0.0055 when re-loaded under scikit-learn 1.9.1; 0.0054 at training time under 1.7.0) is validated only on this dataset; real-traffic calibration performance may differ substantially
 
 ## Commands Run
 
@@ -122,7 +131,7 @@ PYTHONPATH=m1_capture python -c "
   X_cal = pd.read_csv('data/X_cal.csv')[FEATURE_ORDER]
   y_cal = pd.read_csv('data/y_cal.csv').squeeze('columns')
   result = calibrate(model, X_cal, y_cal)
-  result.save('calibration_result.joblib')
+  result.save('calibration_result_candidate.joblib')
 "
 
 # Evaluate on untouched validation partition

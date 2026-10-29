@@ -3,7 +3,7 @@
 
 Manual Part 7 §7.2:
 - Replay is a LABEL SOURCE, not a feature source.
-- Flow quarantine target: UNCERTAIN band (0.30 <= score <= 0.80).
+- Flow replay target: UNCERTAIN band (0.30 <= score <= 0.80).
 - Replay at original speed against sandbox-backend -> did it do damage? -> label.
 - Retrain Module 3 XGBoost with augmented labels.
 - Measure on HELD-OUT data — never on the replayed flows themselves.
@@ -196,7 +196,7 @@ def close_the_loop(
 ) -> Dict[str, Any]:
     """Execute the full feedback loop workflow per Manual §7.2.
 
-    1. Take UNCERTAIN quarantined flows (0.30 <= score <= 0.80)
+    1. Take UNCERTAIN flows held for replay (0.30 <= score <= 0.80)
     2. Replay them at original speed against sandbox
     3. Use did-damage as the LABEL
     4. Retrain

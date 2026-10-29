@@ -4,6 +4,10 @@ logs/
 *.pcap
 *.csv
 *.jsonl
+# Live-lab outputs (written at runtime by dashboard/live_lab.py)
+reports/live_lab_status.json
+reports/live_lab*.log
+reports/protect_demo*.log
 # Keep the dataset (and its session/backup evidence) tracked so teammates can
 # clone it — only huge binary artifacts stay ignored.
 *.parquet

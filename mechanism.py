@@ -232,6 +232,47 @@ def contains(mech: Mechanism, profile: dict) -> tuple[bool, str]:
     return False, "both limits applied but attack below every threshold"
 
 
+def apply_profile_guard(mech: Mechanism, profile: dict) -> Mechanism:
+    """Cross-check a chosen mechanism against the flow's own measured profile.
+
+    WHY THIS EXISTS
+    ---------------
+    `shap_group_scores` sums |SHAP| per group, so a feature that is merely
+    *extreme* inflates its group even when it points the "wrong" way. On real
+    packets a keep-alive request flood is attributed to the **concurrency**
+    group (via `requests_per_conn_so_far`) and picks `limit_conn` — a defence
+    that cannot contain a rate-shaped attack. The synthetic ablation hides this
+    because its SHAP values are hand-set.
+
+    This guard is the fix that does not require trusting (or rewriting) the
+    attribution: take the mechanism the explanation chose, and if `contains()`
+    says it cannot contain the observed profile, add the missing limit.
+
+    profile keys: rate (float), concurrent_conns (int), stall (float).
+    """
+    contained, _why = contains(mech, profile)
+    if contained:
+        return mech
+    rate = mech.rate_limit
+    conn = mech.conn_limit
+    if rate is None and profile.get("rate", 0.0) > 20.0:
+        rate = RATE_LIMIT
+    if conn is None and (profile.get("concurrent_conns", 0) > 1
+                         or profile.get("stall", 0.0) > 5.0):
+        conn = CONN_LIMIT
+    if (rate, conn) == (mech.rate_limit, mech.conn_limit):
+        return mech  # nothing we can add
+    return Mechanism(
+        rate_limit=rate,
+        conn_limit=conn,
+        timeout_s=max(mech.timeout_s or 0.0, 10.0) if conn is not None else mech.timeout_s,
+        driver=f"profile guard on {mech.driver_group}",
+        driver_group=mech.driver_group,
+        reason=(f"{mech.reason} | profile guard: the chosen mechanism cannot "
+                f"contain the observed profile, so the missing limit was added."),
+    )
+
+
 def precision_at_k(ranked, true_ids, k) -> float:
     """Attribution metric: of the k flows we highlight, how many were real?"""
     if not ranked:

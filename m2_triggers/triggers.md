@@ -106,27 +106,26 @@ connections. These values are provisional until evaluated on benign traffic.
 
 
 
-\## Evaluation and false-positive rate
+## Evaluation and false-positive rate
 
+A 20-minute benign evaluation was recorded (26.0 minutes of captured traffic,
+282 flow records) in `reports/module2_benign_20min_20261012_180000/` and
+re-verified in `reports/module2_benign_final_verification_20261012_195007/`.
+CUSUM was calibrated on a separate capture (`captures/cusum_calibration_v3.pcap`,
+296 samples) and then frozen for evaluation.
 
+Measured on that benign capture:
 
-No one-hour benign-traffic evaluation has been recorded yet. Therefore,
+| Trigger | Alerts | Rate |
+|---|---:|---:|
+| stall (`long_idle_connection`) | 36 | 83.07 alerts/hour |
+| connections (`concurrent_conns > 50`) | 0 | 0 |
+| rate (`requests_per_s > 100`) | 0 | 0 |
+| CUSUM | 114 | 1,561 sampled intervals |
+| combined (deduplicated by entity + 1 s bin) | 35 | 80.77 alert-bins/hour |
 
-measured false-positive rates are \*\*pending\*\* and must not be reported as
-
-zero or estimated.
-
-
-
-The evaluation must use at least one hour of purely benign traffic. Record
-
-the duration, number of benign observations, number of false alerts, and
-
-false-positive rate for each trigger and the combined detector.
-
-
-
-CUSUM thresholds must be calibrated on benign traffic and then frozen before
-
-the final evaluation.
-
+These are **benign-traffic false-positive measurements**, not attack-detection
+FPR. The 36 stall alerts are legitimate slow benign uploads with
+`conn_age_s > 60 s`; the fixed-rule thresholds were provisional and were verified
+not to fire. Full caveats: `FINAL_VERIFICATION_RESPONSE.md` and
+`reports/module2_benign_final_verification_20261012_195007/limitations.md`.

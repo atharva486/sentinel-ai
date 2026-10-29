@@ -1,6 +1,10 @@
 Sentinel AI Module 2 - Benign 20-Minute Evaluation - FINAL STATUS
 ================================================================
 
+> **Historical snapshot.** Superseded by `FINAL_VERIFICATION_RESPONSE.md` for
+> the CUSUM result (114 alerts) and the packet/exception reconciliation. The
+> evidence package is kept unchanged.
+
 ### A. Run Status
 - **Status**: Partial success (evidence package complete; CUSUM calibration missing)
 - **Actual capture duration**: 1560.081 seconds (26.0 minutes) of captured traffic

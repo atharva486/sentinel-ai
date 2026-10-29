@@ -40,33 +40,38 @@ In a real WAN deployment, these four may be re-enabled upstream.
 
 ## 4. Training, Validation, Calibration, and Final-Test Methodology
 
-| Stage | Data | Function | Separation Verified |
+| Stage | Data | Function | Separation verified |
 |---|---|---|---|
-| **Training** | `X_train` (chronological rows 0–149), `y_train` | `train_xgb.py:train()` → fits final model on full `X_train` | ✅ Rows 0–149 used for fitting |
-| **Cross-validation** | `X_train` | `train_xgb.py:train()` → `TimeSeriesSplit(n_splits=5)` → OOF PR-AUC | ✅ Out-of-fold; final model retrained on full `X_train` |
-| **Validation (held-out)** | `X_val`, `y_val` | `train_xgb.py:train()` → `predict_proba(X_val)` → Validation PR-AUC/ROC-AUC | ✅ `X_val` is separate partition, chronologically after `X_train` |
-| **Calibration** | `X_cal`, `y_cal` | `m3_scoring/calibrate.py:calibrate()` → IsotonicRegression on held-out predictions | ⚠️ Caller must supply truly held-out partition. The function validates length matching and forbidden columns, but does not verify temporal disjointness from training data. This is a limitation — see §8. |
-| **Final test** | Separate test set | Not yet integrated into this repository | ❌ Not implemented |
+| **Training** | `X_train` = 1,328 rows (sessions 2b/3b/4c), `y_train` | `train_xgb.py:train()` → fits final model on the full training partition | ✅ Whole sessions only; no mixed-role session in training |
+| **Cross-validation** | `X_train` | `train_xgb.py:train()` → `TimeSeriesSplit(n_splits=5)` → OOF PR-AUC | ✅ Out-of-fold; final model retrained on the full partition |
+| **Calibration** | `X_cal` = 2,867 rows (6d–6h), `y_cal` | `m3_scoring/calibrate.py:calibrate()` → IsotonicRegression on held-out predictions | ✅ Separate whole sessions; never used for training or threshold tuning |
+| **Final test** | `X_val` = 1,142 rows (mix1–mix3), `y_val` | `predict_proba` / `calibrator.predict` → PR-AUC, ROC-AUC, ECE, confusion | ✅ Untouched until final evaluation; pure→mixed generalisation |
 
-**Verified implementation**: All three bug fixes from §5.3 are in `train_xgb.py`:
-- Bug 1: TimeSeriesSplit used in a loop for out-of-fold PR-AUC
-- Bug 2: PR-AUC computed on probabilities (not hard labels)
-- Bug 3: Leakage guard checks forbidden columns in `X_train` and `X_val`
-
-**Assumption**: The caller (Module 2 integration or manual script) splits data chronologically and provides a truly held-out calibration partition.
+**Verified implementation**: the final split is explicit in
+`docs/m3_training_log.md` and the CSV artifacts (`data/X_train.csv`,
+`X_cal.csv`, `X_val.csv`). The leakage guard checks forbidden columns;
+`CalibrationResult.load()` enforces `FEATURE_ORDER`.
 
 ## 5. Evaluation Metrics
 
-| Metric | Measured? | Value | Source |
-|---|---|---|---|
-| **PR-AUC (out-of-fold)** | ✅ Yes | Reported per run (synthetic data) | `train_xgb.py` prints this |
-| **PR-AUC (validation, on probabilities)** | ✅ Yes | Reported per run (synthetic data) | `train_xgb.py` prints this |
-| **ROC-AUC (validation, on probabilities)** | ✅ Yes | Reported per run (synthetic data) | `train_xgb.py` prints this |
-| **Per-attack metrics** | ❌ No | Not yet measured | Real traffic dataset not yet integrated |
-| **Calibration error** | ❌ No | Not yet integrated | Reliability diagram data computed; PNG saved when filepath supplied |
-| **SHAP explanation fidelity** | ✅ Yes | Full {feature: shap_value} dict returned | `explain.py` verified |
+Evaluated on the untouched validation sessions `mix1–mix3` (1,142 flows; 297
+attack / 845 benign). Recomputed with the shipped artifact on 27 Oct 2026:
 
-**Numeric values**: The existing tests use synthetic `np.random` data; no real-traffic PR-AUC/ROC-AUC values are available in this repository. Any claimed performance rates would be fabrications — none are included here.
+| Metric | Raw XGBoost | Calibrated (isotonic) | Source |
+|---|---:|---:|---|
+| **PR-AUC** | 0.8255 | **0.8159** | `dashboard/app.py` Model & results; `docs/m3_training_log.md` |
+| **ROC-AUC** | 0.7984 | **0.8510** | same |
+| **ECE (10 bins)** | 0.0656 | **0.0055** | same |
+| **Precision @ 0.5** | — | **1.0000** | same |
+| **Recall @ 0.5** | — | **0.7475** | same |
+| **FPR @ 0.5** | — | **0.0000** | same |
+| **Confusion @ 0.5** | — | **TP 222 / FP 0 / FN 75 / TN 845** | same |
+
+**Measurement provenance.** The original training-time run (12 Oct 2026,
+scikit-learn 1.7.0) recorded calibrated PR-AUC 0.8131 / ROC-AUC 0.8737 /
+ECE 0.0054. Re-loading the same artifact under the pinned 1.9.1 environment gives
+the values above. The gap is the sklearn pickle-version mismatch (see §8);
+re-pickle with 1.9.1 or pin 1.7.0 before claiming bit-exact reproduction.
 
 ## 6. Reliability Diagram
 
@@ -99,7 +104,7 @@ mean_preds, fractions = reliability_diagram(model, X_cal, y_cal, filepath="relia
 | **XGBoost model** | `model.save_model(path)` | `xgb.Booster.load_model()` / `XGBClassifier()` + `load_model()` | ✅ Standard XGBoost |
 | **Isotonic calibrator** | `joblib.dump(calibrator, path)` | `joblib.load(path)` | ✅ Sklearn compatible |
 | **CalibrationResult** | `result.save(path)` | `CalibrationResult.load(path)` | **Both model and calibrator persisted together** in a single `.joblib` artifact; feature order validated on load. See Section 7 for details. |
-| **SHAP explainer** | ❌ Not implemented | ❌ Not implemented | `shap.TreeExplainer(model)` must be rebuilt on load |
+| **SHAP explainer** | ✅ `m3_scoring/explain.py` rebuilds `TreeExplainer` from the loaded model | Not persisted — rebuilt on load | ✅ Implemented; not serialized |
 | **MODEL_CARD.md** | ✅ This document | Read-only | Present at repository root |
 
 **Deployment note**: `CalibrationResult.save/load` persists and restores the complete calibration state in one operation, eliminating the need for callers to separately serialize the model and calibrator.
@@ -108,61 +113,40 @@ mean_preds, fractions = reliability_diagram(model, X_cal, y_cal, filepath="relia
 
 1. **Four excluded features** (`syn_retries`, `bytes_out_per_s`, `bytes_in_ratio`, `time_to_first_byte`) are documented in `m1_capture/features.py:FEATURE_ORDER` as constant on the lab network. They carry no signal here but would be non-constant on a real WAN; re-enable upstream if needed.
 
-2. **Calibration partition separation**: The `calibrate()` function validates that `X_cal`/`y_cal` have matching lengths and no forbidden columns, but does not verify temporal disjointness from training data. The caller must ensure the calibration partition is chronologically after the training partition. This is a design assumption, not verifiable by the function itself.
+2. **Calibration partition separation**: the `calibrate()` function validates matching lengths and forbidden columns, but does not itself verify temporal disjointness from training data. The shipped split does (whole sessions 6d–6h, after 2b–4c), and any new caller must preserve that property.
 
-3. **End-to-end pipeline not integrated**: Module 3 components (`train_xgb.py`, `explain.py`, `calibrate.py`) exist in isolation. There is no glue code that connects sensor feature extraction → model training → calibration → ScoreObject population → mechanism enforcement. Module 2 (TriggerEvent) is not yet created.
+3. **Reproducibility / sklearn version**: the artifact was pickled with scikit-learn 1.7.0 while `requirements.txt` pins 1.9.1, so loading emits `InconsistentVersionWarning` and metrics shift slightly (see §5). Re-pickle with 1.9.1 or pin 1.7.0 for bit-exact claims.
 
-4. **Real-traffic evaluation not performed**: All numeric metrics from existing tests use synthetic `np.random` data. No real-traffic PR-AUC, ROC-AUC, or attack-detection rates are available.
+4. **RUDY is not separately validated** on `mix1–mix3`. It is part of the slow-type capture corpus, but there is no dedicated per-attack PR-AUC breakdown.
 
-5. **Module 2 not created**: The trigger-based defense switching depends on Module 2's `TriggerEvent`, which is not yet in this repository.
+5. **Lab scale**: 11 lab sessions / 5,337 flows, not a production WAN corpus. The four constant features above would need re-enabling before a real deployment.
+
+6. **Adversarial tab is a simulation**: it calls `m5_sandbox.adversarial.evade._simulated_score`, a formula, not the XGBoost model. It illustrates the evasion/damage trade-off; it is not a measured model-evasion rate.
 
 ## 9. Reproducibility
 
-**Current Git state** (repository root `sentinel-ai`):
-
-```
-On branch feature/module3-training
-Your branch is up to date with 'origin/feature/module3-training'.
-
-Untracked files:
-  MODEL_CARD.md
-
-nothing added to commit but untracked files present (use "add" to track)
-```
-
-**Historical note**: `m3_scoring/calibrate.py` was added earlier in the session as the Module 3 calibration implementation. `MODEL_CARD.md` is the new file being created now.
+**Current state (27 Oct 2026):** branch `main`; the final working-tree changes
+are uncommitted and are committed by the repository owner. The dataset and
+artifacts are tracked; `logs/`, `captures/` and the live-lab runtime files are
+gitignored.
 
 **Verified commands** (run from repository root):
 
 ```bash
-# Calibration smoke test — passes
-python -m m3_scoring.calibrate
-# Output:
-# Calibrated score: 0.6000 in [0,1]: True
-# Reliability diagram: 10 bins returned (data computed)
-# All calibration tests PASSED
-
-# Git state — no whitespace issues
-git diff --check
-# (no output)
-
-# Module 3 files — calibrate.py already tracked; MODEL_CARD.md is new
-git status --short
-# ?? MODEL_CARD.md
+python -m pytest -q                 # 53 passed (1 sklearn version warning)
+python test_sensor.py               # all 16-feature checks passed
+python test_mechanism.py            # mechanism switch verified end to end
+python dashboard/protect_demo.py    # writes reports/protection_proof.json
 ```
 
-**Synthetic data note**: All existing tests generate synthetic data with `np.random.seed(42)` and `XGBClassifier(n_estimators=10, random_state=42)`. No realpcap/traffic dataset is currently integrated into these tests.
-
-**Verified commands** (all pass):
-- `python -m m3_scoring.calibrate` — all smoke tests pass
-- `git diff --check` — no issues
-- `python -c "from m1_capture.features import FEATURE_ORDER"` — 16 features imported
-- `python -c "from m3_scoring.calibrate import calibrate, CalibrationResult, reliability_diagram"` — imports work
-- `python -c "from m3_scoring.explain import explain, top_k"` — imports work
-- `python -c "from m3_scoring.train_xgb import train"` — imports work
-
-**No commands are claimed to pass where the actual output does not confirm it**.
+Metrics can be recomputed live in `dashboard/app.py` → **Model & results**.
 
 ## 10. End-to-End Pipeline Status
 
-The full pipeline — sensor pcap extraction → feature vector (m1_capture) → XGBoost training (m3_scoring) → probability calibration → SHAP explanation → ScoreObject population → mechanism enforcement (mechanism.py) — is **not yet integrated** in this repository. Module 2 (TriggerEvent) and the integration layer are pending. Each Module 3 component has been verified in isolation; the glue code connecting them is pending.
+Integrated. The pipeline — pcap → flow features (`m1_capture`) → XGBoost
+(`m3_scoring`) → isotonic calibration → SHAP → mechanism switch
+(`mechanism.py`) → nginx limits (`dashboard/live_lab.py`) — is wired in the
+repository. `dashboard/app.py` replays the 5,337 real captured flows through the
+shipped model; `dashboard/live_lab.py` runs the same loop on real packets;
+`dashboard/protect_demo.py` produces the A/B proof. M2 triggers
+(`m2_triggers/`) and the M5 sandbox (`m5_sandbox/`) are present and tested.
