@@ -62,57 +62,16 @@ def group_of(name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# The policy ladders. Three rungs, hysteresis, per-entity state.
+# The policy ladders. Four rungs, hysteresis, per-entity state.
 #
 # No "challenge" rung: an API client cannot solve a CAPTCHA, so challenging an
 # API caller is a self-inflicted outage. The ladder is forward -> throttle ->
-# quarantine -> block, which is what an API can actually honour.
+# block -> quarantine, which is what an API can actually honour.
 # ---------------------------------------------------------------------------
-
-LADDER = [
-    (0.80, 0.70, "quarantine"),
-    (0.55, 0.46, "block"),
-    (0.30, 0.24, "throttle"),
-    (0.00, 0.00, "forward"),
-]
+from m4_decide.policy import LADDER, Policy
 
 CONN_LIMIT = 20        # what we apply for a stall-class attack
 RATE_LIMIT = 50        # what we apply for a rate-class attack
-
-
-class Policy:
-    """Score -> action, with hysteresis so the action cannot flap."""
-
-    def __init__(self):
-        self._state: dict[str, int] = {}
-
-    def decide(self, entity: str, score: float) -> str:
-        """LADDER is ordered MOST SEVERE FIRST: index 0 = quarantine,
-        index len-1 = forward. So a fresh entity starts at the bottom and
-        must walk TOWARD index 0 to escalate.
-
-        BUG FIXED: the original looped range(current, len(LADDER)) i.e. toward
-        LESS severe rungs. A fresh entity at the last index therefore only ever
-        tested LADDER[-1][0] == 0.00, which every score passes -- so decide()
-        returned "forward" for everything, including 0.99. Escalation was
-        impossible, which silently zeroed the ablation's collateral column and
-        made the hysteresis test pass vacuously.
-        """
-        current = self._state.get(entity, len(LADDER) - 1)
-
-        # ESCALATE: walk toward index 0 while the score clears each enter
-        # threshold (0.80 -> 0.55 -> 0.30).
-        while current > 0 and score >= LADDER[current - 1][0]:
-            current -= 1
-
-        # DE-ESCALATE: walk away from index 0 only once the score falls below
-        # the rung's EXIT threshold (hysteresis deadband). Without the pair,
-        # a score oscillating around a boundary flips the action every call.
-        while current < len(LADDER) - 1 and score < LADDER[current][1]:
-            current += 1
-
-        self._state[entity] = current
-        return LADDER[current][2]
 
 
 # ---------------------------------------------------------------------------
