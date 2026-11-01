@@ -53,9 +53,23 @@ or press **▶ Start live demo** on the 🧪 **Live lab** tab. The runner writes
 - `reports/live_lab_status.json` — counters + current limits,
 - `proxy/limits/{rate,conn}.conf` — the directives it decided on (reloaded into nginx).
 
-Slowloris detection is honest about latency: a connection has to look *slow for a
-while* before the model has evidence, so slow flows flag at roughly 40 s of age,
-while flood flows flag in about a second.
+**Slow-attack detection uses two detectors, OR'd.** The shipped model alone
+learned *flow age*, not *unfinished requests*: a slowloris flow sits on the
+benign floor until it is ~30 s old (and RUDY, a 5 MB body that never arrives,
+is scored *toward* benign). `live_lab.py` therefore runs Module 2's semantic
+stall rules on the same feature vector and takes
+`effective_score = max(model_score, stall_severity)`. The rule fires at 10 s on
+an unterminated header or an unfinished declared body, so slow flows flag in
+~10 s instead of ~40 s. Only the three semantic reasons are used; the age-only
+rules are excluded because the dataset has no benign flow older than 33.7 s.
+Full evidence: `docs/SLOW-DETECTION-FINDING.md`.
+
+Open flows younger than 10 s are reported as **observing** and are excluded from
+TP/FP/TN/FN — they have not had a fair chance to show behaviour yet. Detection
+counts against the project's own `DETECT_THRESHOLD` (0.30), while nginx
+enforcement still turns on at `ON_THRESHOLD` (0.55). Each feed row carries
+`model_score` (the model alone), `score` (the effective verdict) and `evidence`
+(the stall reason that fired, if any).
 
 ### Run the protection proof (A/B)
 
