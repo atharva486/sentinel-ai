@@ -47,17 +47,27 @@ from m1_capture.features import (  # noqa: E402
     WindowTracker,
     build_features,
 )
-from m1_capture.merge import GT_ROLE, role_for_ip  # noqa: E402
+from m1_capture.merge import (  # noqa: E402
+    ATTACK_IP_PREFIXES,
+    BENIGN_IP_PREFIXES,
+    CONTAINER_ROLE,
+    GT_ROLE,
+    role_for_ip,
+)
 from m3_scoring.calibrate import CalibrationResult  # noqa: E402
-from mechanism import Policy, choose_by_shap_group, shap_group_scores  # noqa: E402
+from mechanism import (  # noqa: E402
+    CONN_LIMIT,
+    Policy,
+    RATE_LIMIT,
+    choose_by_shap_group,
+    shap_group_scores,
+)
 
-ARTIFACT_PATH = REPO_ROOT / "calibration_result_candidate.joblib"
+ARTIFACT_PATH = REPO_ROOT / "models" / "calibration_result_current.joblib"
 DATA_PATH = REPO_ROOT / "data" / "features.parquet"
 FEED_PATH = REPO_ROOT / "reports" / "live_feed.jsonl"
 LAB_STATUS_PATH = REPO_ROOT / "reports" / "live_lab_status.json"
 LAB_LOG_PATH = REPO_ROOT / "reports" / "live_lab.log"
-
-THRESHOLD = 0.30
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +119,69 @@ class LiveEngine:
             "mechanism": mech,
             "action": action,
         }
+
+    def score_dataset(self, rows: list[dict]) -> list[dict]:
+        """Score every captured flow with the shipped model, in capture order.
+
+        Same path as :meth:`score` (XGBoost → isotonic → SHAP → switch →
+        Policy), but batched so the dashboard can show the real action
+        totals instead of zeros from an empty playback buffer.
+        """
+        import shap
+
+        if not rows:
+            return []
+        X = np.array(
+            [
+                [float(r["feats"].get(k, 0.0)) for k in FEATURE_ORDER]
+                for r in rows
+            ],
+            dtype=np.float64,
+        )
+        raw = self.art.model.predict_proba(X)[:, 1]
+        cal = np.clip(self.art.calibrator.predict(raw), 0.0, 1.0)
+        if self._explainer is None:
+            self._explainer = shap.TreeExplainer(self.art.model)
+        sv = self._explainer.shap_values(X)
+        if isinstance(sv, list):
+            values = sv[1] if len(sv) == 2 and isinstance(sv[1], np.ndarray) else sv[0]
+        else:
+            values = sv
+        values = np.asarray(values, dtype=float)
+        if values.ndim == 1:
+            values = values.reshape(1, -1)
+        values = values[:, : len(FEATURE_ORDER)]
+
+        # Fresh policy so hysteresis follows capture order, not leftover
+        # state from a previous live-lab or monitor pass.
+        policy = Policy()
+        out: list[dict] = []
+        for i, row in enumerate(rows):
+            shap_values = {
+                name: float(values[i, j]) for j, name in enumerate(FEATURE_ORDER)
+            }
+            groups = shap_group_scores(shap_values)
+            score_i = float(cal[i])
+            mech = choose_by_shap_group(shap_values, score_i)
+            action = policy.decide(str(row["entity"]), score_i)
+            y = int(row["y"])
+            out.append(
+                {
+                    "session": row["session"],
+                    "profile": row["profile"],
+                    "truth": "attack" if y else "benign",
+                    "y": y,
+                    "entity": row["entity"],
+                    "score": score_i,
+                    "raw": float(raw[i]),
+                    "group": max(groups, key=groups.get) if groups else "n/a",
+                    "groups": dict(groups),
+                    "mech": mechanism_kind(mech),
+                    "action": action,
+                    "directive": nginx_directives(mech),
+                }
+            )
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -245,12 +318,12 @@ class LiveSensor:
     count and are not what we defend), so the store stays small and fast.
     """
 
-    #: client-side pools, same prefixes merge.py labels
-    CLIENT_PREFIXES = (
-        "172.18.15.", "172.18.25.", "172.18.35.", "172.18.45.",   # benign
-        "172.18.16.", "172.18.26.", "172.18.36.", "172.18.46.",   # slow-gen
-        "172.18.17.", "172.18.27.", "172.18.37.", "172.18.47.",   # flood-gen
-        "172.18.0.5", "172.18.0.6", "172.18.0.7",                # primary containers
+    #: client-side pools — derived from m1_capture.merge so the labels here
+    #: can never drift from CONTAINER_ROLE / the IP-prefix tables.
+    CLIENT_PREFIXES = tuple(
+        list(BENIGN_IP_PREFIXES)
+        + list(ATTACK_IP_PREFIXES)
+        + list(CONTAINER_ROLE.keys())
     )
 
     def __init__(self, pcap_path: Path, client_prefixes: tuple[str, ...] | None = None,
@@ -262,9 +335,8 @@ class LiveSensor:
         self.client_prefixes = (client_prefixes if client_prefixes is not None
                                 else self.CLIENT_PREFIXES)
 
-    @staticmethod
-    def is_client(ip: str) -> bool:
-        return ip.startswith(LiveSensor.CLIENT_PREFIXES)
+    def is_client(self, ip: str) -> bool:
+        return ip.startswith(self.client_prefixes)
 
     def poll(self) -> list:
         """Ingest new packets; return FlowState objects for client flows."""
@@ -394,13 +466,13 @@ RATE_CONF_ON = (
     "# written live by dashboard/live_lab.py — rate-class mechanism\n"
     "limit_req_zone $binary_remote_addr zone=api:10m rate=50r/s;\n"
     "limit_req_status 429;\n"
-    "limit_req zone=api burst=50 nodelay;\n"
+    f"limit_req zone=api burst={RATE_LIMIT} nodelay;\n"
 )
 CONN_CONF_ON = (
     "# written live by dashboard/live_lab.py — stall/concurrency-class mechanism\n"
     "limit_conn_zone $binary_remote_addr zone=addr:10m;\n"
     "limit_conn_status 429;\n"
-    "limit_conn addr 20;\n"
+    f"limit_conn addr {CONN_LIMIT};\n"
 )
 
 

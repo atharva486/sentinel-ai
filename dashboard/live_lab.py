@@ -51,13 +51,40 @@ from live import (  # noqa: E402
     nginx_directives,
     role_for_ip,
 )
-from mechanism import apply_profile_guard  # noqa: E402
+from mechanism import (  # noqa: E402
+    CONN_LIMIT,
+    DETECT_THRESHOLD,
+    LADDER,
+    Mechanism,
+    apply_profile_guard,
+)
 from m1_capture.features import WindowTracker, build_features  # noqa: E402
 from m1_capture.merge import GT_ROLE  # noqa: E402
 from m1_capture.sensor import parse_http  # noqa: E402
+from m2_triggers.stall import STALL_THRESHOLD_S, detect as detect_stall  # noqa: E402
+from schemas import FlowRecord  # noqa: E402
 
-ON_THRESHOLD = 0.55      # enable a directive above this
-OFF_THRESHOLD = 0.30     # release it once everything is back below this
+ON_THRESHOLD = LADDER[1][0]      # enable a directive above this
+OFF_THRESHOLD = LADDER[2][0]     # release it once everything is back below this
+
+# What counts as "detected" in the confusion matrix. This is the project's own
+# DETECT_THRESHOLD (0.30, the throttle rung), NOT the enforcement threshold
+# above. Using 0.55 here under-counted true positives by one whole rung.
+COUNT_THRESHOLD = DETECT_THRESHOLD
+
+# A flow younger than Module 2's stall threshold cannot be judged yet. The
+# model's slow-attack boundary is ~30 s of flow age, so scoring an open 3 s
+# flow as a false negative is dishonest. Such flows are reported as
+# "observing" and excluded from TP/FP/TN/FN.
+OBSERVE_MIN_S = STALL_THRESHOLD_S
+
+# Only the semantic stall reasons are used on live traffic. These are the ones
+# measured on the labelled dataset (923/923 slowloris, 275/275 RUDY,
+# 6/3820 benign). The age-only rules (long_idle_connection, zero_req_per_conn)
+# are deliberately excluded because the dataset has no benign flow older than
+# 33.7 s, so they were never validated against long-lived benign keep-alives.
+STALL_REASONS_USED = ("header_incomplete", "body_incomplete", "slow_drip")
+
 CAPTURE = "live.pcap"
 
 
@@ -79,6 +106,74 @@ def write_status(**kw) -> None:
     LAB_STATUS_PATH.write_text(json.dumps(payload, indent=2))
 
 
+def stall_evidence(feats: dict, entity: str, flow_id: str, now: float):
+    """Run Module 2's semantic stall rules on the current feature vector.
+
+    Why this exists
+    ---------------
+    The shipped model learned *flow age* rather than *unfinished requests*:
+    in the training data every benign flow is <= 33.7 s old while every
+    slowloris flow is 55-80 s old, so `conn_age_s` alone separates the classes
+    (feature importance: header_complete = 0.0000). Measured consequence: a
+    slowloris flow scores the benign floor until it is ~30 s old, and a
+    completely normal 45 s keep-alive scores 1.0000.
+
+    Module 2's rules are semantic — an unterminated header or an unfinished
+    declared body — so they fire from STALL_THRESHOLD_S (10 s). They are run
+    in parallel with the model and OR'd with it.
+
+    Returns (TriggerEvent, [reasons]) for the validated reasons, else None.
+    """
+    rec = FlowRecord(
+        flow_id=str(flow_id),
+        entity_key=entity,
+        ts_start=0.0,
+        ts_end=now,
+        src_ip=entity,
+        src_port=0,
+        dst_ip="",
+        dst_port=0,
+        bytes_in=int(feats.get("bytes_in", 0) or 0),
+        req_count=int(feats.get("requests_per_conn_so_far", 0) or 0),
+        bytes_in_per_s=float(feats.get("bytes_in_per_s", 0.0)),
+        requests_per_s=float(feats.get("requests_per_s", 0.0)),
+        packets_per_s=float(feats.get("packets_per_s", 0.0)),
+        interarrival_mean=float(feats.get("interarrival_mean", 0.0)),
+        interarrival_std=float(feats.get("interarrival_std", 0.0)),
+        interarrival_max=float(feats.get("interarrival_max", 0.0)),
+        concurrent_conns=float(feats.get("concurrent_conns", 0.0)),
+        conns_per_second_opened=float(feats.get("conns_per_second_opened", 0.0)),
+        requests_per_conn_so_far=float(feats.get("requests_per_conn_so_far", 0.0)),
+        conn_age_s=float(feats.get("conn_age_s", 0.0)),
+        stall_time_s=float(feats.get("stall_time_s", 0.0)),
+        body_frac_sent=float(feats.get("body_frac_sent", 1.0)),
+        bytes_declared=float(feats.get("bytes_declared", 0.0)),
+        body_drip_rate_bps=float(feats.get("body_drip_rate_bps", 0.0)),
+        time_to_first_byte=float(feats.get("time_to_first_byte", 0.0)),
+        header_complete=float(feats.get("header_complete", 1.0)),
+    )
+    event = detect_stall(rec)
+    if event is None:
+        return None
+    used = [r for r in event.detail.get("reasons", []) if r in STALL_REASONS_USED]
+    if not used:
+        return None
+    return event, used
+
+
+def _stall_mechanism(reasons: list[str]) -> Mechanism:
+    """The enforcement a stall-class verdict justifies: hold sockets + timeout."""
+    return Mechanism(
+        conn_limit=CONN_LIMIT,
+        timeout_s=10.0,
+        driver=f"m2 stall rule: {','.join(reasons)}",
+        driver_group="stall",
+        reason=(f"Module 2 stall rule fired ({', '.join(reasons)}): an unfinished "
+                f"request has been open past {STALL_THRESHOLD_S:.0f}s. The model "
+                f"needs ~30s of flow age to see this; the rule sees it now."),
+    )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Real-time packet scoring in the lab")
     ap.add_argument("--duration", type=int, default=120,
@@ -88,6 +183,10 @@ def main() -> int:
     ap.add_argument("--ip-count", type=int, default=40,
                     help="attack source IPs per attack container")
     ap.add_argument("--benign-count", type=int, default=20)
+    ap.add_argument("--rudy-count", type=int, default=0,
+                    help="slow modes: also launch this many RUDY workers from the "
+                         "slow container (large declared body, none delivered). "
+                         "Default 0 keeps the historical slowloris-only behaviour.")
     ap.add_argument("--no-up", action="store_true",
                     help="assume the lab is already running")
     ap.add_argument("--keep-traffic", action="store_true",
@@ -165,9 +264,20 @@ def main() -> int:
                       ip_base="172.18.15", ip_count=args.benign_count,
                       extra=["--benign", str(args.benign_count)])
     if args.mode in ("slow", "mixed"):
-        runner.launch("slow-gen", "slow", dur,
-                      label="livelab", ip_base="172.18.16", ip_count=args.ip_count,
-                      extra=["--slow", str(args.ip_count)])
+        if args.rudy_count > 0:
+            # One container, two slow-attack shapes: `mix` runs slowloris and
+            # RUDY workers side by side. Used to exercise the RUDY branch of the
+            # stall gate, which the slowloris-only launch never touches.
+            runner.launch("slow-gen", "mix", dur,
+                          label="livelab", ip_base="172.18.16",
+                          ip_count=args.ip_count,
+                          extra=["--slow", str(args.ip_count),
+                                 "--rudy", str(args.rudy_count),
+                                 "--flood", "0"])
+        else:
+            runner.launch("slow-gen", "slow", dur,
+                          label="livelab", ip_base="172.18.16", ip_count=args.ip_count,
+                          extra=["--slow", str(args.ip_count)])
     if args.mode in ("flood", "mixed"):
         n_flood = args.ip_count * max(1, args.conns_per_ip)
         runner.launch("flood-gen", "flood", dur,
@@ -182,23 +292,30 @@ def main() -> int:
     decisions = 0
     t0 = time.time()
 
-    ON = 0.55
-    OFF = 0.30
+    ON = ON_THRESHOLD
+    OFF = OFF_THRESHOLD
     latest: dict = {}       # flow_id -> (truth, score, is_final)
     latest_mech: dict = {}  # flow_id -> mechanism kind
     latest_prof: dict = {}  # flow_id -> {rate, concurrent_conns, stall} profile
 
     def confusion() -> dict:
-        tp = fp = tn = fn = un = 0
-        for truth, score, _final in latest.values():
-            pred = score >= ON
+        tp = fp = tn = fn = un = observe = 0
+        for truth, score, final, age in latest.values():
+            # A flow younger than the stall window has not had a fair chance to
+            # show its behaviour yet. Counting it as a miss would measure the
+            # clock, not the detector.
+            if not final and age < OBSERVE_MIN_S:
+                observe += 1
+                continue
+            pred = score >= COUNT_THRESHOLD
             if truth == "attack":
                 tp += int(pred); fn += int(not pred)
             elif truth == "benign":
                 fp += int(pred); tn += int(not pred)
             else:
                 un += 1
-        return {"tp": tp, "fp": fp, "tn": tn, "fn": fn, "unknown": un}
+        return {"tp": tp, "fp": fp, "tn": tn, "fn": fn,
+                "unknown": un, "observing": observe}
 
     try:
         while time.time() - t0 < args.duration:
@@ -233,16 +350,39 @@ def main() -> int:
                 truth = (GT_ROLE.get(http.get("ground_truth"))
                          or role_for_ip(fs.client_ip) or "unknown")
 
+                # ---- OR the model with Module 2's semantic stall rules ----
+                # The model alone needs ~30 s of flow age before it leaves the
+                # benign floor (it learned age, not unfinished requests). The
+                # stall rule fires at STALL_THRESHOLD_S (10 s) on the same
+                # feature vector. Take whichever verdict is stronger; this
+                # never lowers a model score, so the model's own detections
+                # are unchanged.
+                model_score = float(res["calibrated"])
+                score = model_score
+                evidence = ""
+                stall = stall_evidence(feats, fs.client_ip, fs.flow_id, now)
+                if stall is not None:
+                    ev, reasons = stall
+                    evidence = ",".join(reasons)
+                    if ev.severity > score:
+                        score = float(ev.severity)
+                        res["top_group"] = "stall"
+                        res["mechanism"] = _stall_mechanism(reasons)
+                        res["action"] = engine.policy.decide(fs.client_ip, score)
+
                 rec_out = {
                     "i": decisions,
                     "ts": time.time(),
+                    "flow": str(fs.flow_id),
                     "entity": fs.client_ip,
                     "age": round(age, 1),
                     "profile": flow_signature(feats),
                     "truth": truth,
-                    "score": round(res["calibrated"], 4),
+                    "model_score": round(model_score, 4),
+                    "score": round(score, 4),
                     "raw": round(res["raw"], 4),
                     "group": res["top_group"],
+                    "evidence": evidence,
                     "mechanism": mechanism_kind(res["mechanism"]),
                     "reason": res["mechanism"].reason,
                     "action": res["action"],
@@ -251,7 +391,7 @@ def main() -> int:
                 }
                 append_feed(rec_out)
                 decisions += 1
-                latest[fs.flow_id] = (truth, res["calibrated"], fs.t_close is not None)
+                latest[fs.flow_id] = (truth, score, fs.t_close is not None, age)
                 latest_mech[fs.flow_id] = res["mechanism"]
                 latest_prof[fs.flow_id] = {
                     "rate": float(feats.get("requests_per_s", 0.0)),
@@ -260,13 +400,13 @@ def main() -> int:
                 }
 
             # ---- enforcement: drive nginx from the CURRENT state of all flows ---
-            max_cal = max((s for _t, s, _f in latest.values()), default=0.0)
+            max_cal = max((s for _t, s, _f, _a in latest.values()), default=0.0)
             if args.no_enforce:
                 # Shadow mode: we still score and explain, but we never write a
                 # limit. This is the honest "without defence" control arm.
                 want_rate = want_conn = False
             elif max_cal >= ON:
-                severe = [fid for fid, (_t, s, _f) in latest.items() if s >= ON]
+                severe = [fid for fid, (_t, s, _f, _a) in latest.items() if s >= ON]
                 mechs = []
                 for fid in severe:
                     m = latest_mech.get(fid)

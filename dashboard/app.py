@@ -46,7 +46,14 @@ from m1_capture.features import (  # noqa: E402
 )
 from m3_scoring.calibrate import CalibrationResult  # noqa: E402
 from m3_scoring.explain import explain, top_k  # noqa: E402
-from mechanism import Policy, choose_by_shap_group, group_of, shap_group_scores  # noqa: E402
+from mechanism import (  # noqa: E402
+    DETECT_THRESHOLD,
+    LADDER,
+    Policy,
+    choose_by_shap_group,
+    group_of,
+    shap_group_scores,
+)
 from m5_sandbox.adversarial.evade import _simulated_score, evade_sync  # noqa: E402
 
 # The real-time engine, live-packet sensor and Docker lab driver.
@@ -63,7 +70,7 @@ from live import (  # noqa: E402
 )
 
 DATA_PATH = REPO_ROOT / "data" / "features.parquet"
-ARTIFACT_PATH = REPO_ROOT / "calibration_result_candidate.joblib"
+ARTIFACT_PATH = REPO_ROOT / "models" / "calibration_result_current.joblib"
 ABLATION_PATH = REPO_ROOT / "ablation_results.json"
 
 GROUP_ORDER = ["stall", "concurrency", "rate", "other"]
@@ -96,10 +103,12 @@ def get_features() -> pd.DataFrame:
 
 @st.cache_data
 def get_val_scores():
-    """Raw + calibrated scores on the untouched mixed sessions (mix1-3)."""
+    """Raw + calibrated scores on the held-out validation runs (runF, runG)."""
     df = get_features()
     art = get_artifact()
-    val = df[df["session"].isin(["mix1", "mix2", "mix3"])].copy()
+    val = df[df["session"].isin(["runf", "rung"])].copy()
+    if val.empty:
+        return val, np.array([]), np.array([])
     X = val[FEATURE_ORDER].to_numpy(dtype=float)
     raw = art.model.predict_proba(X)[:, 1]
     cal = np.clip(art.calibrator.predict(raw), 0.0, 1.0)
@@ -139,11 +148,11 @@ def expected_calibration_error(y, p, n_bins: int = 10) -> float:
 
 
 def policy_band(score: float) -> str:
-    if score >= 0.80:
+    if score >= LADDER[0][0]:
         return "quarantine"
-    if score >= 0.55:
+    if score >= LADDER[1][0]:
         return "block"
-    if score >= 0.30:
+    if score >= LADDER[2][0]:
         return "throttle"
     return "forward"
 
@@ -443,15 +452,15 @@ with tab_adv:
 
     m1, m2, m3 = st.columns(3)
     m1.metric("Suspicion score", f"{score:.3f}")
-    m2.metric("Evades detector?", "YES" if score < 0.30 else "no")
+    m2.metric("Evades detector?", "YES" if score < DETECT_THRESHOLD else "no")
     m3.metric("Still damages backend?", "YES" if damage else "no")
 
-    if score < 0.30 and not damage:
+    if score < DETECT_THRESHOLD and not damage:
         st.warning(
-            "Self-defeating evasion: the attacker got below 0.30, but by speeding "
-            "up the trickle it no longer exhausts sockets."
+            f"Self-defeating evasion: the attacker got below {DETECT_THRESHOLD:.2f}, "
+            "but by speeding up the trickle it no longer exhausts sockets."
         )
-    elif score < 0.30 and damage:
+    elif score < DETECT_THRESHOLD and damage:
         st.error("Dangerous: evades detection AND still causes damage.")
     elif damage:
         st.info("Still detected, and still damaging — the defence holds.")
@@ -461,8 +470,8 @@ with tab_adv:
     for cc in (15, 30, 50):
         ys = [_simulated_score({"byte_interval": x, "conns": cc, "entity": "adv-1"}) for x in xs]
         fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name=f"conns={cc}"))
-    fig.add_hline(y=0.30, line_dash="dash", line_color="#d1495b",
-                  annotation_text="detection threshold 0.30")
+    fig.add_hline(y=DETECT_THRESHOLD, line_dash="dash", line_color="#d1495b",
+                  annotation_text=f"detection threshold {DETECT_THRESHOLD:.2f}")
     fig.add_vline(x=2.0 / 35.0, line_dash="dot", line_color="#5b6b7c",
                   annotation_text="damage limit")
     fig.add_trace(go.Scatter(x=[bi], y=[score], mode="markers",
@@ -526,7 +535,7 @@ with tab_results:
                                marker_color="#2d7ff9", nbinsx=40))
     fig.add_trace(go.Histogram(x=cal_v[y == 1], name="attack", opacity=0.7,
                                marker_color="#d1495b", nbinsx=40))
-    fig.add_vline(x=0.30, line_dash="dash", line_color="#5b6b7c", annotation_text="0.30")
+    fig.add_vline(x=DETECT_THRESHOLD, line_dash="dash", line_color="#5b6b7c", annotation_text=f"{DETECT_THRESHOLD:.2f}")
     fig.update_layout(barmode="overlay", height=340,
                       xaxis_title="calibrated score", yaxis_title="flows",
                       margin=dict(l=10, r=10, t=20, b=10))
@@ -551,34 +560,6 @@ with tab_results:
         "produces. The white-box lab generates the data; the decision loop is "
         "exercised offline on the captured flows."
     )
-
-
-# ===========================================================================
-# TAB 1 — Live monitor: the real model, streaming real captured flows
-# ===========================================================================
-@st.cache_resource
-def get_live_engine() -> LiveEngine:
-    return LiveEngine(ARTIFACT_PATH)
-
-
-@st.cache_data
-def get_monitor_order() -> list:
-    """Every real flow, in capture order, with its saved feature vector."""
-    df = get_features().sort_values(["session", "t"], kind="stable")
-    rows = []
-    for r in df.itertuples(index=False):
-        feats = {k: float(getattr(r, k)) for k in FEATURE_ORDER}
-        rows.append(
-            {
-                "session": str(r.session),
-                "y": int(r.y),
-                "entity": str(r.entity),
-                "feats": feats,
-                "profile": flow_signature(feats),
-            }
-        )
-    return rows
-
 
 
 # ===========================================================================
@@ -608,6 +589,12 @@ def get_monitor_order() -> list:
     return rows
 
 
+@st.cache_data(show_spinner="Scoring captured flows with the shipped model…")
+def get_monitor_scored() -> list:
+    """Shipped XGBoost + calibrator + SHAP switch + Policy on every parquet flow."""
+    return get_live_engine().score_dataset(get_monitor_order())
+
+
 def _active_stream(order: list, source: str) -> list:
     if source == "Attacks only":
         return [r for r in order if r["y"] == 1]
@@ -616,16 +603,29 @@ def _active_stream(order: list, source: str) -> list:
     return order
 
 
+def _action_totals(rows: list) -> tuple[dict, int, int]:
+    acts = {"forward": 0, "throttle": 0, "block": 0, "quarantine": 0}
+    tp = fp = 0
+    for h in rows:
+        acts[h["action"]] = acts.get(h["action"], 0) + 1
+        if h["score"] >= DETECT_THRESHOLD:
+            if h["truth"] == "attack":
+                tp += 1
+            else:
+                fp += 1
+    return acts, tp, fp
+
+
 @st.fragment(run_every=0.5)
 def live_body(active: list, speed: int) -> None:
     """Streaming half of the monitor. A fragment, so the timer does not rerun
     the rest of the app (other tabs stay responsive and quiet)."""
-    engine = get_live_engine()
     n = len(active)
     playing = bool(st.session_state.get("lm_playing")) and n > 0
     st.caption(
         f"{'▶ streaming' if playing else '⏸ paused'} · "
-        f"{st.session_state.lm_i:,} of {n:,} flows processed"
+        f"walkthrough {st.session_state.lm_i:,} of {n:,} · "
+        "counters below are the shipped model on this whole captured set, not the playback buffer"
     )
 
     if playing:
@@ -635,24 +635,7 @@ def live_body(active: list, speed: int) -> None:
                 st.session_state.lm_playing = False
                 playing = False
                 break
-            row = active[i]
-            res = engine.score(row["feats"], row["entity"])
-            mech = res["mechanism"]
-            st.session_state.lm_hist.append(
-                {
-                    "session": row["session"],
-                    "profile": row["profile"],
-                    "truth": "attack" if row["y"] else "benign",
-                    "entity": row["entity"],
-                    "score": res["calibrated"],
-                    "raw": res["raw"],
-                    "group": res["top_group"],
-                    "groups": res["groups"],
-                    "mech": mechanism_kind(mech),
-                    "action": res["action"],
-                    "directive": nginx_directives(mech),
-                }
-            )
+            st.session_state.lm_hist.append(active[i])
             st.session_state.lm_i += 1
         del st.session_state.lm_hist[:-250]
         playing = bool(st.session_state.lm_playing)
@@ -661,15 +644,7 @@ def live_body(active: list, speed: int) -> None:
 
     hist = st.session_state.lm_hist
     done = st.session_state.lm_i
-    acts = {"forward": 0, "throttle": 0, "block": 0, "quarantine": 0}
-    tp = fp = 0
-    for h in hist:
-        acts[h["action"]] = acts.get(h["action"], 0) + 1
-        if h["score"] >= 0.30:
-            if h["truth"] == "attack":
-                tp += 1
-            else:
-                fp += 1
+    acts, tp, _fp = _action_totals(active)
     m = st.columns(6)
     m[0].metric("Flows seen", f"{done:,} / {n:,}")
     m[1].metric("Forward", f"{acts['forward']:,}")
@@ -679,7 +654,10 @@ def live_body(active: list, speed: int) -> None:
     m[5].metric("Attacks caught", f"{tp:,}")
 
     if not hist:
-        st.info("Press ▶ Start to stream the captured flows through the live pipeline.")
+        st.info(
+            "Those counts are already the real decisions on the captured flows. "
+            "Press ▶ Start only if you want to walk through them one by one."
+        )
         return
 
     cur = hist[-1]
@@ -689,7 +667,7 @@ def live_body(active: list, speed: int) -> None:
         band = policy_band(cur["score"])
         badge = {"forward": "🟢", "throttle": "🟡", "block": "🟠",
                  "quarantine": "🔴"}[cur["action"]]
-        flag = "✅ correct" if (cur["truth"] == "attack") == (cur["score"] >= 0.30) else "⚠️ miss"
+        flag = "✅ correct" if (cur["truth"] == "attack") == (cur["score"] >= DETECT_THRESHOLD) else "⚠️ miss"
         st.markdown(
             f"{badge} `{cur['entity']}` · signature **{cur['profile']}** · "
             f"truth **{cur['truth']}** · session `{cur['session']}` · {flag}  \n"
@@ -730,9 +708,9 @@ def live_body(active: list, speed: int) -> None:
                 marker=dict(color=color, size=7),
             )
         )
-    fig.add_hline(y=0.30, line_dash="dot", line_color="#5b6b7c")
-    fig.add_hline(y=0.55, line_dash="dot", line_color="#e08e0b")
-    fig.add_hline(y=0.80, line_dash="dot", line_color="#d1495b")
+    fig.add_hline(y=LADDER[2][0], line_dash="dot", line_color="#5b6b7c")
+    fig.add_hline(y=LADDER[1][0], line_dash="dot", line_color="#e08e0b")
+    fig.add_hline(y=LADDER[0][0], line_dash="dot", line_color="#d1495b")
     fig.update_layout(height=260, margin=dict(l=8, r=8, t=20, b=8),
                       yaxis_range=[0, 1], xaxis_title="last 80 flows",
                       yaxis_title="calibrated score")
@@ -762,11 +740,13 @@ with tab_live:
     st.subheader("Real-time monitor — every flow scored as it arrives")
     st.caption(
         "The shipped model, its isotonic calibrator, the SHAP explanation and the "
-        "SHAP→defence switch run on the project's **real captured flows**, one after "
-        "another. Press ▶ Start: this is the pipeline working, live — not a screenshot."
+        "SHAP→defence switch run on the project's **real captured flows**. The "
+        "Forward / Throttle / Block / Quarantine / Attacks caught numbers are the "
+        "shipped model on that whole set (parquet labels + `calibration_result_candidate.joblib`), "
+        "not zeros from an unstarted playback."
     )
 
-    order = get_monitor_order()
+    order = get_monitor_scored()
     st.session_state.setdefault("lm_playing", False)
     st.session_state.setdefault("lm_i", 0)
     st.session_state.setdefault("lm_hist", [])
@@ -846,13 +826,15 @@ def lab_body() -> None:
     if status:
         ctr = status.get("counters", {})
         lim = status.get("limits", {})
-        mm = st.columns(6)
+        mm = st.columns(7)
         mm[0].metric("Decisions", f"{status.get('decisions', 0):,}")
         mm[1].metric("True positives", f"{ctr.get('tp', 0):,}")
         mm[2].metric("False positives", f"{ctr.get('fp', 0):,}")
         mm[3].metric("False negatives", f"{ctr.get('fn', 0):,}")
-        mm[4].metric("limit_req", "ON" if lim.get("rate") else "off")
-        mm[5].metric("limit_conn", "ON" if lim.get("conn") else "off")
+        mm[4].metric("Observing", f"{ctr.get('observing', 0):,}",
+                     help="Open flows younger than 10 s — not yet judgeable.")
+        mm[5].metric("limit_req", "ON" if lim.get("rate") else "off")
+        mm[6].metric("limit_conn", "ON" if lim.get("conn") else "off")
 
     if not feed and not running:
         st.info("Press ▶ Start live demo to capture and score real packets.")
@@ -860,13 +842,33 @@ def lab_body() -> None:
 
     if feed:
         dfl = pd.DataFrame(feed)
-        keep = [c for c in ["i", "entity", "truth", "profile", "age", "score",
+        keep = [c for c in ["i", "entity", "truth", "profile", "age",
+                            "model_score", "score", "evidence",
                             "group", "mechanism", "action", "final"]
                 if c in dfl.columns]
         st.markdown("**Live decisions** (newest first)")
-        st.dataframe(dfl[keep].iloc[::-1].head(15), width="stretch", hide_index=True)
+        st.caption(
+            f"{len(dfl):,} decisions in this run (saved to reports/live_feed.jsonl). "
+            "`score` is the effective verdict: the model's calibrated score OR "
+            "Module 2's stall-rule severity, whichever is higher. `model_score` is "
+            "the model alone; `evidence` names the stall rule that fired, if any. "
+            "Open flows younger than 10 s are reported as *observing* and are not "
+            "counted as misses."
+        )
+        st.dataframe(dfl[keep].iloc[::-1], width="stretch", hide_index=True)
+        st.download_button(
+            "Download all decisions (CSV)",
+            data=dfl.to_csv(index=False),
+            file_name="live_decisions.csv",
+            mime="text/csv",
+        )
 
     st.markdown("**nginx limits the runner has written**")
+    st.caption(
+        "`limit_req` = rate limiting (token bucket per IP); `limit_conn` = "
+        "concurrent-connection cap per IP. ON when the worst flow score is "
+        ">= 0.55, OFF once everything drops below 0.30."
+    )
     lc1, lc2 = st.columns(2)
     rate_txt = (REPO_ROOT / "proxy" / "limits" / "rate.conf").read_text()
     conn_txt = (REPO_ROOT / "proxy" / "limits" / "conn.conf").read_text()
@@ -902,21 +904,27 @@ with tab_lab:
             "hosted demo. Run this tab on the lab host for the on-the-wire version."
         )
 
-    c = st.columns([1.3, 1.0, 1.2, 1.0, 1.2])
+    c = st.columns([1.3, 1.0, 1.0, 1.2, 1.0, 1.2])
     mode = c[0].selectbox("Traffic profile", ["mixed", "flood", "slow", "benign"])
     dur = c[1].number_input("Seconds", min_value=20, max_value=600, value=120, step=10)
-    if c[2].button("▶ Start live demo", width="stretch",
+    rudy = c[2].checkbox("Include RUDY", value=False,
+                         help="Also launch RUDY workers from the slow container: "
+                              "a 5 MB body that is declared and never sent.")
+    if c[3].button("▶ Start live demo", width="stretch",
                    disabled=running or not docker_ok, type="primary"):
         logf = open(REPO_ROOT / "reports" / "live_lab.log", "a", encoding="utf-8")
+        cmd = [sys.executable, str(DASH_DIR / "live_lab.py"),
+               "--duration", str(int(dur)), "--mode", mode]
+        if rudy and mode in ("slow", "mixed"):
+            cmd += ["--rudy-count", "20"]
         proc = subprocess.Popen(
-            [sys.executable, str(DASH_DIR / "live_lab.py"),
-             "--duration", str(int(dur)), "--mode", mode],
+            cmd,
             cwd=REPO_ROOT, stdout=logf, stderr=subprocess.STDOUT,
             start_new_session=True,
         )
         st.session_state.lab_proc = proc
         running = True
-    if c[3].button("⏹ Stop", width="stretch", disabled=not running):
+    if c[4].button("⏹ Stop", width="stretch", disabled=not running):
         try:
             os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
         except Exception:
@@ -925,7 +933,7 @@ with tab_lab:
         _lab.stop_capture()
         _lab.stop_traffic()
         running = False
-    c[4].metric("Docker", "ready" if docker_ok else "n/a")
+    c[5].metric("Docker", "ready" if docker_ok else "n/a")
 
     lab_body()
 

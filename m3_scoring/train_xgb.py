@@ -134,6 +134,10 @@ def train(
     X_train = X_train[feature_order]
     X_val = X_val[feature_order]
 
+    # ---- Leakage guard: forbidden columns must never reach the model -----
+    leakage_guard(X_train)
+    leakage_guard(X_val)
+
     # ---- Basic sanity checks -------------------------------------------
     if len(X_train) != len(y_train):
         raise ValueError(

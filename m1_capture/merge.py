@@ -91,11 +91,43 @@ def label_generated(flow_jsonl: str | Path) -> pd.DataFrame:
         if r.get("t_close") is not None:
             win.on_close(ent, r["t_close"])
 
-    # Pass 2: features at each flow's own decision time (t_last).
+    # Pass 2: features at 15 s bucketed snapshots of each flow's lifetime.
+    # Emitting one row per bucket (plus the final closed snapshot) removes the
+    # age shortcut: a slowloris flow contributes benign-looking early snapshots
+    # and attack-looking late ones, and long-lived benign keep-alives contribute
+    # old benign snapshots, so the model cannot rely on conn_age_s alone.
+    BUCKET_S = 15.0
     rows = []
     for r, http, role, ent in parsed:
-        fvec = build_features(r, http, win, ent, r["t_last"])
-        rows.append({**fvec, "entity": ent, "role": role, "t": r["t_first"]})
+        t_start = float(r["t_first"])
+        if r.get("t_close") is not None:
+            t_end = float(r["t_close"])
+        else:
+            t_end = float(r["t_last"])
+        # bucket boundaries from t_start up to t_end, capped at 600 s of age
+        age_cap = min(t_end - t_start, 600.0)
+        n_buckets = int(age_cap // BUCKET_S) + 1
+        seen = set()
+        for k in range(n_buckets):
+            now = t_start + (k + 1) * BUCKET_S
+            if now > t_end:
+                now = t_end
+            key = round(now, 3)
+            if key in seen:
+                continue
+            seen.add(key)
+            if now < t_start:
+                continue
+            fvec = build_features(r, http, win, ent, now)
+            rows.append({**fvec, "entity": ent, "role": role,
+                         "t": t_start, "snapshot_t": now,
+                         "flow_id": r.get("flow_id")})
+        # always emit the final closed/instant snapshot if not already
+        if round(t_end, 3) not in seen:
+            fvec = build_features(r, http, win, ent, t_end)
+            rows.append({**fvec, "entity": ent, "role": role,
+                         "t": t_start, "snapshot_t": t_end,
+                         "flow_id": r.get("flow_id")})
 
     df = pd.DataFrame(rows)
     if not df.empty:

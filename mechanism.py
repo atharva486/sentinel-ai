@@ -76,6 +76,13 @@ LADDER = [
     (0.00, 0.00, "forward"),
 ]
 
+# Derived (never hardcode): the enter thresholds come straight from LADDER so
+# there is a single source of truth for "what counts as an attack".
+QUARANTINE_THRESHOLD = LADDER[0][0]
+BLOCK_THRESHOLD = LADDER[1][0]
+THROTTLE_THRESHOLD = LADDER[2][0]
+DETECT_THRESHOLD = min(t for t, _exit, action in LADDER if action != "forward")
+
 CONN_LIMIT = 20        # what we apply for a stall-class attack
 RATE_LIMIT = 50        # what we apply for a rate-class attack
 

@@ -100,9 +100,9 @@ async def benign_worker(agent: int, duration: int, think_lo: float,
                  "connections_failed": 0, "requests_attempted": 0,
                  "requests_completed": 0, "requests_failed": 0,
                  "exceptions": []}
-    end = time.time() + duration
     if stagger > 0:
         await asyncio.sleep(random.uniform(0.0, stagger))
+    end = time.time() + duration
     uid = f"u{agent}"
     gt_header = _gt_header("benign")
 
@@ -201,9 +201,9 @@ async def slowloris_worker(conn_id: int, duration: int,
     a normal request followed by an idle keep-alive socket — a different attack,
     and not what the header_complete / stall features are meant to capture.
     """
-    end = time.time() + duration
     if stagger > 0:
         await asyncio.sleep(random.uniform(0.0, stagger))
+    end = time.time() + duration
     if time.time() >= end:
         return
     reader, writer = await _connect(src_ip)
@@ -230,9 +230,9 @@ async def rudy_worker(conn_id: int, duration: int,
                       declared: int = 5_000_000, chunk: int = 10,
                       interval: float = 0.5, stagger: float = 0.0,
                       src_ip: str | None = None):
-    end = time.time() + duration
     if stagger > 0:
         await asyncio.sleep(random.uniform(0.0, stagger))
+    end = time.time() + duration
     if time.time() >= end:
         return
     reader, writer = await _connect(src_ip)
@@ -263,9 +263,9 @@ async def flood_worker(conn_id: int, duration: int, req_per_conn: int = 200,
     that is the bug that made Hulk ineffective in CIC-IDS2017. Reusing the
     connection is what lets one connection sustain thousands of requests/sec.
     """
-    end = time.time() + duration
     if stagger > 0:
         await asyncio.sleep(random.uniform(0.0, stagger))
+    end = time.time() + duration
     if time.time() >= end:
         return
     reader, writer = await _connect(src_ip)
