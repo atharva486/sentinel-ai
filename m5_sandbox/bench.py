@@ -38,16 +38,30 @@ from mechanism import Mechanism, choose_by_shap_group
 
 PROXY_URL = os.getenv("PROXY_URL", "http://localhost:8080")
 
+# bench attack name -> gen/generate.py --mode value
+GENERATOR_MODE = {"slowloris": "slow", "rudy": "rudy", "flood": "flood", "http_flood": "flood"}
+
 
 def read_system_state(simulated_attack: Optional[str] = None) -> Dict[str, Any]:
-    """Read current detection and mechanism state from detector state file or simulation."""
+    """Read current detection and mechanism state from detector state file or simulation.
+
+    Prefers a per-attack file written by demo.py (detector_state_<attack>.json)
+    next to DETECTOR_STATE_FILE, then the shared file, then the modelled fallback.
+    """
     state_file = os.getenv("DETECTOR_STATE_FILE", "/tmp/detector_state.json")
-    if os.path.exists(state_file):
-        try:
-            with open(state_file, "r") as f:
-                return json.load(f)
-        except Exception:
-            pass
+    candidates = [state_file]
+    if simulated_attack:
+        stem, ext = os.path.splitext(state_file)
+        candidates.insert(0, f"{stem}_{simulated_attack}{ext}")
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                with open(path, "r") as f:
+                    state = json.load(f)
+                state.setdefault("source", path)
+                return state
+            except Exception:
+                pass
 
     # Modelled state dictionary matching trained SHAP attributions
     if simulated_attack == "slowloris":
@@ -217,7 +231,8 @@ def run_benchmark(
             attack_container = "flood-gen" if attack == "flood" else "slow-gen"
             attack_proc = subprocess.Popen([
                 "docker", "compose", "exec", "-T", attack_container,
-                "python", "generate.py", "--mode", attack, "--duration", str(duration)
+                "python", "generate.py", "--mode", GENERATOR_MODE.get(attack, attack),
+                "--duration", str(duration)
             ])
         except Exception as e:
             print(f"  Note: Could not drive attack container ({e}).")
@@ -232,6 +247,11 @@ def run_benchmark(
     while time.time() - poll_start < min(duration, 5.0):
         elapsed = time.time() - t0
         state = read_system_state(simulated_attack=attack)
+
+        if state.get("mechanism") == "forward":
+            # the detector let this attack through: nothing to time
+            print(f"  -> NOT DETECTED | mechanism: forward | {state.get('reason', '')}")
+            break
 
         if t_detected is None and elapsed >= simulated_delay:
             t_detected = round(elapsed, 2)
@@ -269,8 +289,8 @@ def run_benchmark(
         "users": users,
         "mode": "live_measured" if docker_active else "modelled_specification",
         "is_modelled": not docker_active,
-        "detection_latency_s": t_detected or simulated_delay,
-        "time_to_contain_s": t_contained or (simulated_delay + 0.31),
+        "detection_latency_s": t_detected,
+        "time_to_contain_s": t_contained,
         "driver_group": state["driver_group"],
         "mechanism": state["mechanism"],
         "legit_baseline_pct": baseline_ok,
@@ -278,6 +298,10 @@ def run_benchmark(
         "legit_added_p99_ms": p99_added,
     }
     return result
+
+
+def _secs(v: Optional[float]) -> str:
+    return "missed" if v is None else f"{v:.2f}s"
 
 
 def run_full_suite(live_docker: bool = False, proxy_url: str = PROXY_URL) -> List[Dict[str, Any]]:
@@ -312,8 +336,8 @@ def run_full_suite(live_docker: bool = False, proxy_url: str = PROXY_URL) -> Lis
         tag = "" if docker_active else " [M]"
         print(
             f"{r['attack']:<12} | "
-            f"{r['detection_latency_s']:>7.2f}s{tag:<8} | "
-            f"{r['time_to_contain_s']:>7.2f}s{tag:<6} | "
+            f"{_secs(r['detection_latency_s']):>8}{tag:<8} | "
+            f"{_secs(r['time_to_contain_s']):>8}{tag:<6} | "
             f"{r['driver_group']:<8} | "
             f"{r['mechanism']:<22} | "
             f"{r['legit_preserved_pct']:>7.1f}%{tag:<8} | "

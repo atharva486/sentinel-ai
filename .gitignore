@@ -27,3 +27,6 @@ __pycache__/
 
 # Misc
 get-docker.sh
+
+# demo.py output (regenerate with: python demo.py)
+detector_state*.json
