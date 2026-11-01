@@ -188,11 +188,9 @@ class LiveEngine:
 # Signature (display-only) and directive rendering
 # ---------------------------------------------------------------------------
 def flow_signature(f: dict) -> str:
-    """A human label for what the flow *looks* like, from its features only."""
+    """A human label for what the flow *looks like*, from its features only."""
     if f.get("header_complete", 1.0) < 0.5 and f.get("conn_age_s", 0.0) >= 1.0:
         return "slowloris"
-    if f.get("bytes_declared", 0.0) > 0 and f.get("body_frac_sent", 1.0) < 0.9:
-        return "rudy"
     if f.get("requests_per_s", 0.0) >= 20.0:
         return "flood"
     if f.get("concurrent_conns", 0.0) >= 20 and f.get("conn_age_s", 0.0) < 5.0:

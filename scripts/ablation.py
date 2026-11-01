@@ -39,7 +39,6 @@ from m1_capture.features import group_of
 # Real measured values from test_sensor.py feed these numbers:
 #   benign     rate ~155 B/s, 3 reqs/conn,   stall 0
 #   slowloris  rate ~7   B/s, 0 reqs/conn,   stall 15 s, header incomplete
-#   rudy       rate ~14  B/s, 1 req/conn,    stall 19 s, 5 MB declared
 #   flood      rate ~1240 B/s, 40 reqs/conn,  stall 0
 # ---------------------------------------------------------------------------
 @dataclass
@@ -100,21 +99,6 @@ SCENARIOS = [
         ground_truth="limit_conn",
     ),
     Scenario(
-        name="rudy", is_attack=True,
-        profile={"rate": 14.0, "concurrent_conns": 100, "stall": 19.0},
-        features={"bytes_in_per_s": 14.0, "requests_per_s": 0.05,
-                  "requests_per_conn_so_far": 1.0, "stall_time_s": 19.0,
-                  "header_complete": 1.0, "bytes_declared": 5_000_000.0,
-                  "body_frac_sent": 0.00004, "concurrent_conns": 100.0,
-                  "conns_per_second_opened": 8.0, "interarrival_max": 1.0},
-        shap={"bytes_in_per_s": -0.28, "requests_per_s": -0.22,
-              "requests_per_conn_so_far": -0.11, "stall_time_s": 0.38,
-              "header_complete": 0.01, "bytes_declared": 0.26,
-              "body_frac_sent": 0.31, "concurrent_conns": 0.19},
-        trigger="stall",
-        ground_truth="limit_conn",
-    ),
-    Scenario(
         name="flood", is_attack=True,
         profile={"rate": 1240.0, "concurrent_conns": 40, "stall": 0.0},
         features={"bytes_in_per_s": 1240.0, "requests_per_s": 20.0,
@@ -156,14 +140,12 @@ class Row:
 #   matching the Section 6.3 table: collateral = 0 across all policies).
 #   If scored at 0.38 (suspicious operating point), policy throttles (collateral = 1).
 # - slowloris: 0.91 -> quarantine
-# - rudy: 0.88 -> quarantine
 # - flood: 0.94 -> quarantine
 # ---------------------------------------------------------------------------
 SCORE = {
     "benign_browsing": 0.05,
     "benign_flash_crowd": 0.20,     # clean synthetic baseline (collateral = 0)
     "slowloris": 0.91,
-    "rudy": 0.88,
     "flood": 0.94,
 }
 

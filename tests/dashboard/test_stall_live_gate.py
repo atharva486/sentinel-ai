@@ -69,25 +69,6 @@ def test_nothing_fires_before_window():
     assert got is None
 
 
-def test_rudy_body_drip_fires():
-    """A 5 MB body declared with 0 % delivered and no progress: classic RUDY."""
-    got = live_lab.stall_evidence(
-        _feats(
-            conn_age_s=12.0,
-            bytes_declared=5_000_000.0,
-            body_frac_sent=0.0,
-            body_drip_rate_bps=0.0,
-        ),
-        "10.0.0.4",
-        "f-rudy",
-        100.0,
-    )
-    assert got is not None
-    event, reasons = got
-    assert "body_incomplete" in reasons
-    assert event.severity >= live_lab.COUNT_THRESHOLD
-
-
 def test_age_only_rules_are_deliberately_excluded():
     """`long_idle_connection` matches a completely normal 70 s keep-alive that
     has only made one request. Module 2 raises it, but the live gate must drop

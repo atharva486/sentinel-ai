@@ -183,10 +183,6 @@ def main() -> int:
     ap.add_argument("--ip-count", type=int, default=40,
                     help="attack source IPs per attack container")
     ap.add_argument("--benign-count", type=int, default=20)
-    ap.add_argument("--rudy-count", type=int, default=0,
-                    help="slow modes: also launch this many RUDY workers from the "
-                         "slow container (large declared body, none delivered). "
-                         "Default 0 keeps the historical slowloris-only behaviour.")
     ap.add_argument("--no-up", action="store_true",
                     help="assume the lab is already running")
     ap.add_argument("--keep-traffic", action="store_true",
@@ -264,20 +260,9 @@ def main() -> int:
                       ip_base="172.18.15", ip_count=args.benign_count,
                       extra=["--benign", str(args.benign_count)])
     if args.mode in ("slow", "mixed"):
-        if args.rudy_count > 0:
-            # One container, two slow-attack shapes: `mix` runs slowloris and
-            # RUDY workers side by side. Used to exercise the RUDY branch of the
-            # stall gate, which the slowloris-only launch never touches.
-            runner.launch("slow-gen", "mix", dur,
-                          label="livelab", ip_base="172.18.16",
-                          ip_count=args.ip_count,
-                          extra=["--slow", str(args.ip_count),
-                                 "--rudy", str(args.rudy_count),
-                                 "--flood", "0"])
-        else:
-            runner.launch("slow-gen", "slow", dur,
-                          label="livelab", ip_base="172.18.16", ip_count=args.ip_count,
-                          extra=["--slow", str(args.ip_count)])
+        runner.launch("slow-gen", "slow", dur,
+                      label="livelab", ip_base="172.18.16", ip_count=args.ip_count,
+                      extra=["--slow", str(args.ip_count)])
     if args.mode in ("flood", "mixed"):
         n_flood = args.ip_count * max(1, args.conns_per_ip)
         runner.launch("flood-gen", "flood", dur,

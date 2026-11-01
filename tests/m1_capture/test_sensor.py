@@ -126,20 +126,6 @@ def slowloris():
     return write_pcap("slowloris", p)
 
 
-def rudy():
-    """Valid complete header, Content-Length: 5000000, body trickled."""
-    cp = 43000
-    head = (b"POST /api/upload HTTP/1.1\r\nHost: api\r\n"
-            b"Content-Length: 5000000\r\n\r\n")
-    p = [syn(T0, cp=cp), synack(T0 + 0.002, cp=cp)]
-    p.append(data(T0 + 0.004, head, cp=cp))
-    t = T0 + 0.006
-    for _ in range(20):
-        p.append(data(t, b"x" * 10, cp=cp))
-        t += 1.0
-    return write_pcap("rudy", p)
-
-
 def flood():
     """40 complete requests in ~2 seconds on ONE connection."""
     cp = 44000
@@ -231,19 +217,6 @@ def main() -> None:
     print(f"        stall_time_s={f['stall_time_s']:.1f}  "
           f"header_complete={f['header_complete']}")
 
-    print("\n=== RUDY: huge Content-Length, body trickled ===")
-    recs, rows = feats_from(rudy())
-    f, http = rows[-1][2], rows[-1][1]
-    check("header_complete == 1", f["header_complete"] == 1.0, f["header_complete"])
-    check("declared_body parsed == 5000000",
-          http["declared_body"] == 5000000, http["declared_body"])
-    check("body_frac_sent < 1", f["body_frac_sent"] < 1.0, f["body_frac_sent"])
-    check("stall_time_s > 0", f["stall_time_s"] > 0, f["stall_time_s"])
-    check("bytes_declared > 1e6", f["bytes_declared"] > 1e6, f["bytes_declared"])
-    print(f"        bytes_declared={f['bytes_declared']:.0f}  "
-          f"body_frac_sent={f['body_frac_sent']:.5f}  "
-          f"drip={f['body_drip_rate_bps']:.2f} B/s")
-
     print("\n=== FLOOD: high rate, every request complete ===")
     recs, rows = feats_from(flood())
     f = rows[0][2]
@@ -270,17 +243,16 @@ def main() -> None:
     print("\n=== SEPARATION: can a rate-vs-stall switch use these? ===")
     _, b = feats_from(benign())
     _, s = feats_from(slowloris())
-    _, r = feats_from(rudy())
     _, fl = feats_from(flood())
     table = [("benign", b[0][2]), ("slowloris", s[-1][2]),
-             ("rudy", r[-1][2]), ("flood", fl[0][2])]
+             ("flood", fl[0][2])]
     keys = ["stall_time_s", "bytes_in_per_s", "requests_per_conn_so_far",
             "header_complete", "bytes_declared", "body_frac_sent",
             "concurrent_conns"]
-    print(f"    {'feature':28}{'benign':>10}{'slowlor':>10}{'rudy':>10}{'flood':>10}   group")
+    print(f"    {'feature':28}{'benign':>10}{'slowlor':>10}{'flood':>10}   group")
     for k in keys:
         v = [t[1].get(k, 0.0) for t in table]
-        print(f"    {k:28}{v[0]:10.2f}{v[1]:10.2f}{v[2]:10.2f}{v[3]:10.2f}   {group_of(k)}")
+        print(f"    {k:28}{v[0]:10.2f}{v[1]:10.2f}{v[2]:10.2f}   {group_of(k)}")
 
     slow_vec = vectorise(s[-1][2])
     fast_vec = vectorise(fl[0][2])
@@ -313,7 +285,7 @@ def main() -> None:
     if FAIL:
         print(f"FAILED ({len(FAIL)}): {FAIL}")
         sys.exit(1)
-    print(f"all {len(FEATURE_ORDER)}-feature checks passed across 5 traffic shapes")
+    print(f"all {len(FEATURE_ORDER)}-feature checks passed across 4 traffic shapes")
 
 
 if __name__ == "__main__":

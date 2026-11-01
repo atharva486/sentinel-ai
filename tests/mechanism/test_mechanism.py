@@ -17,6 +17,11 @@ Run:  python3 test_mechanism.py
 from __future__ import annotations
 
 import sys
+from pathlib import Path
+
+_here = Path(__file__).resolve().parent
+sys.path.insert(0, str(_here.parent.parent))              # repo root
+sys.path.insert(0, str(_here.parent / "m1_capture"))      # tests/m1_capture
 
 import test_sensor as T
 from m1_capture.features import WindowTracker, build_features, group_of
@@ -38,7 +43,7 @@ def check(label, cond, detail=""):
 
 def features_of(name):
     path = {"benign": T.benign, "slowloris": T.slowloris,
-            "rudy": T.rudy, "flood": T.flood}[name]()
+            "flood": T.flood}[name]()
     recs = __import__("m1_capture.sensor", fromlist=["read_pcap"]).read_pcap(path, flush_after=5.0)
     win = WindowTracker()
     rows = []
@@ -58,7 +63,7 @@ def realistic_shap(f: dict, name: str) -> dict:
     Derived from the measured features, not invented per scenario, so the
     switch is exercised on numbers consistent with the extractor.
     """
-    if name in ("slowloris", "rudy"):
+    if name == "slowloris":
         return {
             "stall_time_s": 0.41 if f["stall_time_s"] > 0 else 0.0,
             "header_complete": 0.29 if not f["header_complete"] else 0.0,
@@ -83,7 +88,6 @@ def realistic_shap(f: dict, name: str) -> dict:
 PROFILES = {
     "benign":      {"rate": 155.0, "concurrent_conns": 1, "stall": 0.0},
     "slowloris":   {"rate": 7.0, "concurrent_conns": 200, "stall": 15.0},
-    "rudy":        {"rate": 14.0, "concurrent_conns": 100, "stall": 19.0},
     "flood":       {"rate": 1240.0, "concurrent_conns": 40, "stall": 0.0},
 }
 
@@ -107,7 +111,7 @@ def main() -> None:
           (fs["stall_time_s"], ff["stall_time_s"]))
 
     print("\n=== STATIC RATE LIMIT FAILS ON SLOW ATTACKS ===")
-    for name in ("slowloris", "rudy"):
+    for name in ("slowloris",):
         m = choose_static(0.95)
         ok, why = contains(m, PROFILES[name])
         check(f"static limit_req does NOT contain {name}", not ok, why)
@@ -116,9 +120,8 @@ def main() -> None:
     check("static limit_req DOES contain flood", ok, why)
 
     print("\n=== THE SWITCH FIXES IT, ON MEASURED FEATURES ===")
-    for name in ("slowloris", "rudy", "flood"):
-        f = {"slowloris": fs, "rudy": features_of("rudy")[-1],
-             "flood": ff}[name]
+    for name in ("slowloris", "flood"):
+        f = {"slowloris": fs, "flood": ff}[name]
         shap = realistic_shap(f, name)
         top1 = choose_by_shap_top1(
             sorted(shap.items(), key=lambda kv: -abs(kv[1])), 0.92)
@@ -134,10 +137,8 @@ def main() -> None:
               f"rate={grp.rate_limit} conn={grp.conn_limit}")
 
     print("\n=== TRIGGER RULE vs SHAP: the ablation's honest comparison ===")
-    for name, trig in (("slowloris", "stall"), ("rudy", "stall"),
-                       ("flood", "rate")):
-        f = {"slowloris": fs, "rudy": features_of("rudy")[-1],
-             "flood": ff}[name]
+    for name, trig in (("slowloris", "stall"), ("flood", "rate")):
+        f = {"slowloris": fs, "flood": ff}[name]
         shap = realistic_shap(f, name)
         mt = choose_by_trigger(trig, 0.92)
         mg = choose_by_shap_group(shap, 0.92)

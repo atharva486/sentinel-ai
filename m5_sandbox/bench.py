@@ -123,7 +123,7 @@ def run(attack: str, proxy_url: str) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Sentinel-AI live benchmark (measurements only)")
-    ap.add_argument("--attack", choices=["slowloris", "rudy", "flood", "all"], default="all")
+    ap.add_argument("--attack", choices=["slowloris", "flood", "all"], default="all")
     ap.add_argument("--proxy-url", default=PROXY_URL)
     ap.add_argument("--live", action="store_true",
                     help="measure against running Docker containers")
@@ -145,7 +145,7 @@ def main() -> int:
               "measured here. Install it or use dashboard/protect_demo.py.")
         return 2
 
-    attacks = ["slowloris", "rudy", "flood"] if args.attack == "all" else [args.attack]
+    attacks = ["slowloris", "flood"] if args.attack == "all" else [args.attack]
     rows = [run(a, args.proxy_url) for a in attacks]
 
     print("=" * 78)

@@ -17,7 +17,7 @@ from .sensor import parse_http
 # unlabelled), so an unlisted pool silently loses data â€” keep these in sync.
 CONTAINER_ROLE: Dict[str, str] = {
     "172.18.0.5": "benign",   # legit-loadgen (primary)
-    "172.18.0.6": "attack",   # slow-gen  (slowloris / rudy)
+    "172.18.0.6": "attack",   # slow-gen  (slowloris)
     "172.18.0.7": "attack",   # flood-gen
 }
 
@@ -32,12 +32,11 @@ ATTACK_IP_PREFIXES: tuple[str, ...] = (
 )
 
 # Ground-truth header values -> binary role. The header is embedded by the
-# generator (X-Ground-Truth: benign|slow|rudy|flood) so labeling works even
+# generator (X-Ground-Truth: benign|slow|flood) so labeling works even
 # when one IP does mixed roles. If absent, fall back to IP-based role_for_ip.
 GT_ROLE: Dict[str, str] = {
     "benign": "benign",
     "slow": "attack",
-    "rudy": "attack",
     "flood": "attack",
 }
 
