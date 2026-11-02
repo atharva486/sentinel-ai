@@ -1,29 +1,4 @@
 #!/usr/bin/env python3
-"""Aurora Bank — the small site the reverse proxy protects.
-
-This used to be a two-line stub that answered "ok" to everything. A stub is a
-weak demo target: a reviewer cannot tell whether the reverse proxy is protecting
-a *site* or just a function. So the backend now serves a small but real portal
-(a landing page, a health endpoint and an account API) which you can open at
-http://localhost:8080 while traffic runs.
-
-Two things are deliberate:
-
-  * The `/api/*` endpoints used by the traffic generators (`/api/form/*`,
-    `/api/search`, `/api/upload`, `/api/items`) still return exactly "ok".
-    The model's features are request-side only (see m1_capture/features.py's
-    "no leakage" rule), so leaving them byte-identical keeps live captures
-    comparable to the training captures.
-
-  * The portal routes are additive. They do not shadow any generator path.
-
-Optional env (used by the protection proof to make the target finite, like a
-real server with a bounded worker pool):
-
-    SITE_CONCURRENCY   max in-flight requests handled at once (0 = unlimited)
-    SITE_WORK_MS       simulated per-request work in milliseconds (0 = none)
-"""
-
 import asyncio
 import os
 import time
@@ -107,8 +82,6 @@ async def account(request: web.Request) -> web.Response:
 
 
 async def handle(request: web.Request) -> web.Response:
-    # Generator / API path: read and discard the body, then answer exactly as
-    # the training captures saw. Keep this branch boring on purpose.
     sem = _get_sem()
     if sem is None:
         await request.read()

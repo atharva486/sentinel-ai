@@ -1,45 +1,30 @@
 ﻿from __future__ import annotations
-
 import json
 from pathlib import Path
 from typing import Dict
-
 import pandas as pd
-
 from .features import WindowTracker, build_features
 from .sensor import parse_http
 
-
-# Source IP -> role. Primary container IPs are PINNED in docker-compose.yaml
-# (lab subnet 172.18.0.0/16). When generators bind each worker to its own
-# source IP (gen/generate.py --ip-base), those IPs fall in per-container pools
-# labelled by PREFIX below. An IP matching nothing is dropped (role None ->
-# unlabelled), so an unlisted pool silently loses data â€” keep these in sync.
 CONTAINER_ROLE: Dict[str, str] = {
-    "172.18.0.5": "benign",   # legit-loadgen (primary)
-    "172.18.0.6": "attack",   # slow-gen  (slowloris)
-    "172.18.0.7": "attack",   # flood-gen
+    "172.18.0.5": "benign",
+    "172.18.0.6": "attack",
+    "172.18.0.7": "attack",
 }
 
-# Per-container source-IP pools for multi-IP captures. One pool per session;
-# third octet ends in 5 = benign, 6 = slow-gen, 7 = flood-gen, mirroring .5/.6/.7.
 BENIGN_IP_PREFIXES: tuple[str, ...] = (
     "172.18.15.", "172.18.25.", "172.18.35.", "172.18.45.",
 )
 ATTACK_IP_PREFIXES: tuple[str, ...] = (
-    "172.18.16.", "172.18.26.", "172.18.36.", "172.18.46.",   # slow-gen pools
-    "172.18.17.", "172.18.27.", "172.18.37.", "172.18.47.",   # flood-gen pools
+    "172.18.16.", "172.18.26.", "172.18.36.", "172.18.46.",
+    "172.18.17.", "172.18.27.", "172.18.37.", "172.18.47.",
 )
 
-# Ground-truth header values -> binary role. The header is embedded by the
-# generator (X-Ground-Truth: benign|slow|flood) so labeling works even
-# when one IP does mixed roles. If absent, fall back to IP-based role_for_ip.
 GT_ROLE: Dict[str, str] = {
     "benign": "benign",
     "slow": "attack",
     "flood": "attack",
 }
-
 
 def role_for_ip(ip) -> str | None:
     if not ip:
@@ -54,7 +39,6 @@ def role_for_ip(ip) -> str | None:
             return "attack"
     return None
 
-
 def label_generated(flow_jsonl: str | Path) -> pd.DataFrame:
     p = Path(flow_jsonl)
     recs = []
@@ -66,18 +50,12 @@ def label_generated(flow_jsonl: str | Path) -> pd.DataFrame:
 
     win = WindowTracker(window_s=10.0)
 
-    # Pass 1: parse + label, and register every connection's [open, close]
-    # interval BEFORE computing anything. window_features() only counts
-    # intervals that CONTAIN the decision time, so this is order-independent
-    # and leaks nothing: a connection that has not opened by `now` is never
-    # counted, and one still open at `now` counts correctly.
     parsed: list[tuple[dict, dict, str, str]] = []
     for r in recs:
         try:
             http = parse_http(bytes.fromhex(r["fwd_payload"]))
         except Exception:
             continue
-        # Prefer per-flow ground-truth header; fall back to IP-based labeling.
         gt = http.get("ground_truth")
         role = GT_ROLE.get(gt) if gt else None
         if role is None:
@@ -90,11 +68,6 @@ def label_generated(flow_jsonl: str | Path) -> pd.DataFrame:
         if r.get("t_close") is not None:
             win.on_close(ent, r["t_close"])
 
-    # Pass 2: features at 15 s bucketed snapshots of each flow's lifetime.
-    # Emitting one row per bucket (plus the final closed snapshot) removes the
-    # age shortcut: a slowloris flow contributes benign-looking early snapshots
-    # and attack-looking late ones, and long-lived benign keep-alives contribute
-    # old benign snapshots, so the model cannot rely on conn_age_s alone.
     BUCKET_S = 15.0
     rows = []
     for r, http, role, ent in parsed:
@@ -103,7 +76,6 @@ def label_generated(flow_jsonl: str | Path) -> pd.DataFrame:
             t_end = float(r["t_close"])
         else:
             t_end = float(r["t_last"])
-        # bucket boundaries from t_start up to t_end, capped at 600 s of age
         age_cap = min(t_end - t_start, 600.0)
         n_buckets = int(age_cap // BUCKET_S) + 1
         seen = set()
@@ -121,7 +93,6 @@ def label_generated(flow_jsonl: str | Path) -> pd.DataFrame:
             rows.append({**fvec, "entity": ent, "role": role,
                          "t": t_start, "snapshot_t": now,
                          "flow_id": r.get("flow_id")})
-        # always emit the final closed/instant snapshot if not already
         if round(t_end, 3) not in seen:
             fvec = build_features(r, http, win, ent, t_end)
             rows.append({**fvec, "entity": ent, "role": role,
@@ -132,7 +103,6 @@ def label_generated(flow_jsonl: str | Path) -> pd.DataFrame:
     if not df.empty:
         df["y"] = (df["role"] == "attack").astype(int)
     return df
-
 
 if __name__ == "__main__":
     print("merge.py ready. IPs are pinned in docker-compose.yaml; "

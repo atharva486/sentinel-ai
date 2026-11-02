@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-
 import json
 import os
 import signal
 import subprocess
 import sys
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -66,18 +64,15 @@ st.set_page_config(
     layout="wide",
 )
 
-
 # Loads the saved detection model and calibrator.
 @st.cache_resource
 def get_artifact() -> CalibrationResult:
     return CalibrationResult.load(str(ARTIFACT_PATH))
 
-
 # Reads the labelled flow data from parquet.
 @st.cache_data
 def get_features() -> pd.DataFrame:
     return pd.read_parquet(DATA_PATH)
-
 
 # Returns raw and calibrated scores for held-out runs.
 @st.cache_data
@@ -92,7 +87,6 @@ def get_val_scores():
     cal = np.clip(art.calibrator.predict(raw), 0.0, 1.0)
     return val, raw, cal
 
-
 # Maps a feature name to its defence group (stall, concurrency, rate, or other).
 def feature_group(name: str) -> str:
     if name in STALL_FEATURES:
@@ -102,7 +96,6 @@ def feature_group(name: str) -> str:
     if name in RATE_FEATURES:
         return "rate"
     return "other"
-
 
 # Computes calibration error across probability bins.
 def expected_calibration_error(y, p, n_bins: int = 10) -> float:
@@ -118,7 +111,6 @@ def expected_calibration_error(y, p, n_bins: int = 10) -> float:
         ece += mask.mean() * abs(y[mask].mean() - p[mask].mean())
     return float(ece)
 
-
 # Turns a score into a policy action like forward, throttle, block, or quarantine.
 def policy_band(score: float) -> str:
     if score >= LADDER[0][0]:
@@ -128,7 +120,6 @@ def policy_band(score: float) -> str:
     if score >= LADDER[2][0]:
         return "throttle"
     return "forward"
-
 
 # Builds nginx limit directives from a mechanism decision.
 def nginx_directives(mech) -> str:
@@ -140,7 +131,6 @@ def nginx_directives(mech) -> str:
     if mech.timeout_s is not None:
         lines.append(f"proxy_read_timeout {int(mech.timeout_s)}s;")
     return "\n".join(lines) if lines else "# no directive (forward)"
-
 
 CSS = """
 <style>
@@ -172,9 +162,7 @@ CSS = """
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
-
 df_all = get_features()
-
 st.markdown(
     f"""
     <div class="hero">
@@ -210,10 +198,8 @@ top[4].metric("Feature tiers", "3")
     ]
 )
 
-
 with tab_flow:
     st.subheader("How one request becomes a defence decision")
-
     stages = [
         ("Lab traffic",
          "nginx proxy + three generators emit benign, slowloris/RUDY and flood traffic on an isolated network.",
@@ -278,7 +264,6 @@ with tab_flow:
             f"**rate** — `{', '.join(sorted(RATE_FEATURES))}`"
         )
 
-
 with tab_results:
     st.subheader("Held-out performance (sessions mix1–mix3)")
 
@@ -337,12 +322,10 @@ with tab_results:
                       margin=dict(l=10, r=10, t=20, b=10))
     st.plotly_chart(fig, width="stretch")
 
-
 # Creates a cached live scoring engine for captured flows.
 @st.cache_resource
 def get_live_engine() -> LiveEngine:
     return LiveEngine(ARTIFACT_PATH)
-
 
 # Orders every captured flow by session and time with its features.
 @st.cache_data
@@ -362,12 +345,10 @@ def get_monitor_order() -> list:
         )
     return rows
 
-
 # Scores all captured flows using the shipped model and calibrator.
 @st.cache_data(show_spinner="Scoring captured flows with the shipped model…")
 def get_monitor_scored() -> list:
     return get_live_engine().score_dataset(get_monitor_order())
-
 
 # Filters flows by traffic stream: all, attacks only, or benign only.
 def _active_stream(order: list, source: str) -> list:
@@ -376,7 +357,6 @@ def _active_stream(order: list, source: str) -> list:
     if source == "Benign only":
         return [r for r in order if r["y"] == 0]
     return order
-
 
 # Counts defence actions and true/false positives across flows.
 def _action_totals(rows: list) -> tuple[dict, int, int]:
@@ -390,7 +370,6 @@ def _action_totals(rows: list) -> tuple[dict, int, int]:
             else:
                 fp += 1
     return acts, tp, fp
-
 
 # Renders the live monitor fragment with scores, gauges, and charts.
 @st.fragment(run_every=0.5)
@@ -505,7 +484,6 @@ def live_body(active: list, speed: int) -> None:
     ).iloc[::-1]
     st.dataframe(feed, width="stretch", hide_index=True)
 
-
 with tab_live:
     st.subheader("Real-time monitor — every flow scored as it arrives")
 
@@ -543,7 +521,6 @@ with tab_live:
 
     live_body(_active_stream(order, source), speed)
 
-
 # Reads the most recent lines from the live decisions feed file.
 def _read_feed(path: Path, limit: int = 500) -> list:
     if not path.exists():
@@ -558,7 +535,6 @@ def _read_feed(path: Path, limit: int = 500) -> list:
                 pass
     return out
 
-
 # Safely reads a JSON file, returning an empty dict if missing or bad.
 def _read_json(path: Path) -> dict:
     if not path.exists():
@@ -567,7 +543,6 @@ def _read_json(path: Path) -> dict:
         return json.loads(path.read_text())
     except Exception:
         return {}
-
 
 # Refreshes the live lab display with container status and decisions.
 @st.fragment(run_every=2.0)
@@ -602,21 +577,6 @@ def lab_body() -> None:
         st.info("Press ▶ Start live demo to capture and score real packets.")
         return
 
-    if feed:
-        dfl = pd.DataFrame(feed)
-        keep = [c for c in ["i", "entity", "truth", "profile", "age",
-                            "model_score", "score", "evidence",
-                            "group", "mechanism", "action", "final"]
-                if c in dfl.columns]
-        st.markdown("**Live decisions** (newest first)")
-        st.dataframe(dfl[keep].iloc[::-1], width="stretch", hide_index=True)
-        st.download_button(
-            "Download all decisions (CSV)",
-            data=dfl.to_csv(index=False),
-            file_name="live_decisions.csv",
-            mime="text/csv",
-        )
-
     st.markdown("**nginx limits the runner has written**")
     lc1, lc2 = st.columns(2)
     rate_txt = (REPO_ROOT / "proxy" / "limits" / "rate.conf").read_text()
@@ -637,10 +597,13 @@ def lab_body() -> None:
         )
 
     c = st.columns([1.3, 1.0, 1.2, 1.0, 1.2])
-    mode = c[0].selectbox("Traffic profile", ["mixed", "flood", "slow", "benign"])
-    dur = c[1].number_input("Seconds", min_value=20, max_value=600, value=120, step=10)
+    mode = c[0].selectbox("Traffic profile", ["mixed", "flood", "slow", "benign"],
+                          key="lab_mode_select")
+    dur = c[1].number_input("Seconds", min_value=20, max_value=600, value=120, step=10,
+                            key="lab_duration_input")
     if c[2].button("▶ Start live demo", width="stretch",
-                   disabled=running or not docker_ok, type="primary"):
+                   disabled=running or not docker_ok, type="primary",
+                   key="lab_start_button"):
         logf = open(REPO_ROOT / "reports" / "live_lab.log", "a", encoding="utf-8")
         cmd = [sys.executable, str(DASH_DIR / "live_lab.py"),
                "--duration", str(int(dur)), "--mode", mode]
@@ -651,7 +614,8 @@ def lab_body() -> None:
         )
         st.session_state.lab_proc = proc
         running = True
-    if c[3].button("⏹ Stop", width="stretch", disabled=not running):
+    if c[3].button("⏹ Stop", width="stretch", disabled=not running,
+                   key="lab_stop_button"):
         try:
             os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
         except Exception:
@@ -662,48 +626,23 @@ def lab_body() -> None:
         running = False
     c[4].metric("Docker", "ready" if docker_ok else "n/a")
 
-    lab_body()
-
+    st.divider()
+    st.markdown("**Live decisions** (newest first)")
+    if feed:
+        dfl = pd.DataFrame(feed)
+        keep = [c for c in ["i", "entity", "truth", "profile", "age",
+                            "model_score", "score", "evidence",
+                            "group", "mechanism", "action", "final"]
+                if c in dfl.columns]
+        st.dataframe(dfl[keep].iloc[::-1], width="stretch", hide_index=True)
+        st.download_button(
+            "Download all decisions (CSV)",
+            data=dfl.to_csv(index=False),
+            file_name="live_decisions.csv",
+            mime="text/csv",
+            key="lab_download_csv",
+        )
 
 with tab_lab:
     st.subheader("Live lab — real packets, captured and scored as they arrive")
-
-    docker_ok = LabRunner.docker_available()
-    st.session_state.setdefault("lab_proc", None)
-    proc = st.session_state.get("lab_proc")
-    running = proc is not None and proc.poll() is None
-
-    if not docker_ok:
-        st.warning(
-            "Docker isn't reachable from here, so the physical lab can't start on "
-            "this machine. The ▶️ Live monitor tab needs no Docker — use it for the "
-            "hosted demo. Run this tab on the lab host for the on-the-wire version."
-        )
-
-    c = st.columns([1.3, 1.0, 1.2, 1.0, 1.2])
-    mode = c[0].selectbox("Traffic profile", ["mixed", "flood", "slow", "benign"])
-    dur = c[1].number_input("Seconds", min_value=20, max_value=600, value=120, step=10)
-    if c[2].button("▶ Start live demo", width="stretch",
-                   disabled=running or not docker_ok, type="primary"):
-        logf = open(REPO_ROOT / "reports" / "live_lab.log", "a", encoding="utf-8")
-        cmd = [sys.executable, str(DASH_DIR / "live_lab.py"),
-               "--duration", str(int(dur)), "--mode", mode]
-        proc = subprocess.Popen(
-            cmd,
-            cwd=REPO_ROOT, stdout=logf, stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-        st.session_state.lab_proc = proc
-        running = True
-    if c[3].button("⏹ Stop", width="stretch", disabled=not running):
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-        except Exception:
-            pass
-        _lab = LabRunner()
-        _lab.stop_capture()
-        _lab.stop_traffic()
-        running = False
-    c[4].metric("Docker", "ready" if docker_ok else "n/a")
-
     lab_body()

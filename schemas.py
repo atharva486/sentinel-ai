@@ -4,10 +4,8 @@ from typing import Optional
 
 @dataclass(frozen=True)
 class FlowRecord:
-    """One connection's worth of observed behaviour, mid-flight or complete."""
     flow_id: str
     entity_key: str
-    # hash(ip, ja3, session) — NOT ip alone
     ts_start: float
     ts_end: float
     src_ip: str
@@ -24,7 +22,6 @@ class FlowRecord:
     conn_id: str = ""
     ja3: Optional[str] = None
     ja4: Optional[str] = None
-    # ---- the 20 derived features (Module 1's contract with the model) ----
     bytes_in_per_s: float = 0.0
     bytes_out_per_s: float = 0.0
     requests_per_s: float = 0.0
@@ -46,43 +43,36 @@ class FlowRecord:
     bytes_in_ratio: float = 0.0
     is_open: float = 1.0
 
+
 @dataclass(frozen=True)
 class TriggerEvent:
-    """Module 2 raises these. Cheap, no ML."""
     ts: float
     entity_key: str
     trigger: str
-    # "rate" | "cusum" | "connections" | "stall" | "entropy"
     severity: float
     detail: dict = field(default_factory=dict)
 
+
 @dataclass(frozen=True)
 class ScoreObject:
-    """Module 3 produces these."""
     flow_id: str
     ts: float
     score: float
-    # calibrated P(attack), 0..1
     model_version: str
     shap_values: dict
-    # feature -> SHAP value, ALL of them
     shap_top_k: list
-    # ranked, for display
     tcn_score: Optional[float] = None
     trigger_context: Optional[TriggerEvent] = None
 
 
 @dataclass(frozen=True)
 class ActionObject:
-    """The decision layer (`mechanism.py`) produces these. This is what actually gets enforced."""
     flow_id: str
     entity_key: str
     action: str
-    # "forward"|"throttle"|"block"|"quarantine"
     rate_limit: Optional[int] = None
     conn_limit: Optional[int] = None
     timeout_s: Optional[float] = None
     mechanism_reason: str = ""
     driver_group: str = ""
-    # ★ which group caused this: stall|concurrency|rate
     expires_at: float = 0.0

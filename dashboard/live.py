@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-"""live.py — the real-time engine behind the dashboard.
-
-Two things live here and neither re-implements the model:
-
-  LiveEngine   scores a flow with the project's *actual* XGBoost model, the
-               isotonic calibrator, SHAP (TreeExplainer) and the SHAP->defence
-               switch. Used by the "Live monitor" tab to stream real captured
-               flows, and by the live lab to score real packets.
-
-  LiveSensor   a genuine live packet sensor: it tails a growing pcap written by
-               tcpdump, reassembles TCP connections with m1_capture.sensor's own
-               logic, and produces feature vectors with m1_capture.features —
-               the same code path that built the training set.
-
-  LabRunner    drives the Docker lab (proxy + generators) so the demo can emit
-               real traffic and capture it, on request.
-"""
 from __future__ import annotations
 
 import json
@@ -30,32 +13,29 @@ from pathlib import Path
 
 import numpy as np
 
-# ---------------------------------------------------------------------------
-# Import path (works from repo root or from dashboard/)
-# ---------------------------------------------------------------------------
 DASH_DIR = Path(__file__).resolve().parent
 REPO_ROOT = DASH_DIR.parent
 for _p in (REPO_ROOT, REPO_ROOT / "m1_capture", REPO_ROOT / "m3_scoring"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-import dpkt  # noqa: E402
+import dpkt
 
-from m1_capture import sensor  # noqa: E402
-from m1_capture.features import (  # noqa: E402
+from m1_capture import sensor
+from m1_capture.features import (
     FEATURE_ORDER,
     WindowTracker,
     build_features,
 )
-from m1_capture.merge import (  # noqa: E402
+from m1_capture.merge import (
     ATTACK_IP_PREFIXES,
     BENIGN_IP_PREFIXES,
     CONTAINER_ROLE,
     GT_ROLE,
     role_for_ip,
 )
-from m3_scoring.calibrate import CalibrationResult  # noqa: E402
-from mechanism import (  # noqa: E402
+from m3_scoring.calibrate import CalibrationResult
+from mechanism import (
     CONN_LIMIT,
     Policy,
     RATE_LIMIT,
@@ -69,19 +49,12 @@ FEED_PATH = REPO_ROOT / "reports" / "live_feed.jsonl"
 LAB_STATUS_PATH = REPO_ROOT / "reports" / "live_lab_status.json"
 LAB_LOG_PATH = REPO_ROOT / "reports" / "live_lab.log"
 
-
-# ---------------------------------------------------------------------------
-# The model, wired exactly like the offline pipeline
-# ---------------------------------------------------------------------------
 class LiveEngine:
-    """Score one flow: raw -> calibrated -> SHAP -> group -> mechanism -> policy."""
-
     def __init__(self, artifact_path: Path | str = ARTIFACT_PATH):
         self.art = CalibrationResult.load(str(artifact_path))
         self.policy = Policy()
         self._explainer = None
 
-    # -- SHAP (same normalisation as m3_scoring/explain.py) ------------------
     def _shap(self, feats: dict) -> dict:
         import shap
 
@@ -121,12 +94,6 @@ class LiveEngine:
         }
 
     def score_dataset(self, rows: list[dict]) -> list[dict]:
-        """Score every captured flow with the shipped model, in capture order.
-
-        Same path as :meth:`score` (XGBoost → isotonic → SHAP → switch →
-        Policy), but batched so the dashboard can show the real action
-        totals instead of zeros from an empty playback buffer.
-        """
         import shap
 
         if not rows:
@@ -152,8 +119,6 @@ class LiveEngine:
             values = values.reshape(1, -1)
         values = values[:, : len(FEATURE_ORDER)]
 
-        # Fresh policy so hysteresis follows capture order, not leftover
-        # state from a previous live-lab or monitor pass.
         policy = Policy()
         out: list[dict] = []
         for i, row in enumerate(rows):
@@ -183,12 +148,7 @@ class LiveEngine:
             )
         return out
 
-
-# ---------------------------------------------------------------------------
-# Signature (display-only) and directive rendering
-# ---------------------------------------------------------------------------
 def flow_signature(f: dict) -> str:
-    """A human label for what the flow *looks like*, from its features only."""
     if f.get("header_complete", 1.0) < 0.5 and f.get("conn_age_s", 0.0) >= 1.0:
         return "slowloris"
     if f.get("requests_per_s", 0.0) >= 20.0:
@@ -196,7 +156,6 @@ def flow_signature(f: dict) -> str:
     if f.get("concurrent_conns", 0.0) >= 20 and f.get("conn_age_s", 0.0) < 5.0:
         return "conn-burst"
     return "benign"
-
 
 def nginx_directives(mech) -> str:
     lines = []
@@ -207,7 +166,6 @@ def nginx_directives(mech) -> str:
     if mech.timeout_s is not None:
         lines.append(f"proxy_read_timeout {int(mech.timeout_s)}s;")
     return "\n".join(lines) if lines else "# no directive (forward)"
-
 
 def mechanism_kind(mech) -> str:
     has_conn = mech.conn_limit is not None
@@ -221,9 +179,6 @@ def mechanism_kind(mech) -> str:
     return "none"
 
 
-# ---------------------------------------------------------------------------
-# Animated pipeline (pure CSS, so it moves without blocking the script)
-# ---------------------------------------------------------------------------
 PIPELINE = [
     ("📡", "Traffic"),
     ("🎥", "Capture"),
@@ -244,9 +199,8 @@ _PIPE_CSS = """
 .jp-pkt{position:absolute;top:7px;left:0;width:17px;height:17px;border-radius:50%;
   background:#2d7ff9;box-shadow:0 0 12px 2px rgba(45,127,249,.7);
   animation:jptravel 3.6s cubic-bezier(.45,.05,.55,.95) infinite;}
-@keyframes jptravel{0%{left:2px}90%{left:calc(100% - 22px)}
-  100%{left:calc(100% - 22px)}}
 .jp-pkt.off{animation:none;left:47%;opacity:.3;box-shadow:none;}
+@keyframes jptravel{0%{left:0%;}100%{left:95%;}}
 .jp-stages{display:flex;gap:6px;}
 .jp-stage{flex:1;border:1px solid rgba(120,150,180,.30);border-radius:9px;
   padding:9px 5px 7px;text-align:center;background:rgba(45,127,249,.05);}
@@ -255,7 +209,6 @@ _PIPE_CSS = """
 .jp-stage.active{background:rgba(45,127,249,.22);border-color:#2d7ff9;}
 </style>
 """
-
 
 def pipeline_html(active: int | None = None, animate: bool = True) -> str:
     parts = [_PIPE_CSS, '<div class="jp-wrap"><div class="jp-rail"></div>']
@@ -269,13 +222,7 @@ def pipeline_html(active: int | None = None, animate: bool = True) -> str:
     parts.append("</div></div>")
     return "".join(parts)
 
-
-# ---------------------------------------------------------------------------
-# Live packet sensor — tails a growing pcap and rebuilds flows continuously
-# ---------------------------------------------------------------------------
 class PcapTail:
-    """Incremental pcap reader: returns only packets appended since last call."""
-
     def __init__(self, path: Path):
         self.path = Path(path)
         self.offset = 0
@@ -302,22 +249,13 @@ class PcapTail:
                 ts_s, ts_us, incl, _orig = struct.unpack("<IIII", hdr)
                 data = fh.read(incl)
                 if len(data) < incl:
-                    break  # packet still being written
+                    break
                 out.append((ts_s + ts_us / 1e6, data))
                 pos = fh.tell()
         self.offset = pos
         return out
 
-
 class LiveSensor:
-    """Accumulates TCP flows from a growing pcap, using sensor.py's logic.
-
-    Only client→proxy flows are kept (the proxy→backend hops double the flow
-    count and are not what we defend), so the store stays small and fast.
-    """
-
-    #: client-side pools — derived from m1_capture.merge so the labels here
-    #: can never drift from CONTAINER_ROLE / the IP-prefix tables.
     CLIENT_PREFIXES = tuple(
         list(BENIGN_IP_PREFIXES)
         + list(ATTACK_IP_PREFIXES)
@@ -337,7 +275,6 @@ class LiveSensor:
         return ip.startswith(self.client_prefixes)
 
     def poll(self) -> list:
-        """Ingest new packets; return FlowState objects for client flows."""
         for ts, buf in self.tail.read_new():
             ip = sensor._unwrap(buf, self.tail.linktype)
             if ip is None or not isinstance(ip.data, dpkt.tcp.TCP):
@@ -345,8 +282,6 @@ class LiveSensor:
             tcp = ip.data
             src = socket.inet_ntoa(ip.src)
             dst = socket.inet_ntoa(ip.dst)
-            # Drop the proxy->backend hop entirely: it doubles the flow count
-            # and is not traffic we defend.
             if not (self.is_client(src) or self.is_client(dst)):
                 continue
             self.store.ingest(
@@ -357,17 +292,12 @@ class LiveSensor:
         return [fs for fs in self.store.flows.values()
                 if fs.client_ip.startswith(self.client_prefixes)]
 
-
-# ---------------------------------------------------------------------------
-# Docker lab driver
-# ---------------------------------------------------------------------------
 class LabRunner:
     SERVICES = ["proxy", "backend", "legit-loadgen", "slow-gen", "flood-gen"]
 
     def __init__(self, repo: Path = REPO_ROOT):
         self.repo = Path(repo)
 
-    # -- capability ---------------------------------------------------------
     @staticmethod
     def docker_available() -> bool:
         if shutil.which("docker") is None:
@@ -387,7 +317,6 @@ class LabRunner:
             capture_output=True, text=True, timeout=timeout,
         )
 
-    # -- lifecycle ----------------------------------------------------------
     def up(self) -> subprocess.CompletedProcess:
         return self.compose(["up", "-d", *self.SERVICES], timeout=300)
 
@@ -414,14 +343,12 @@ class LabRunner:
                 names.append(row.get("Service") or row.get("Name") or "?")
         return names
 
-    # -- source-IP pools (one IP per worker, as the real captures used) -----
     def add_ip_pool(self, service: str, base: str, count: int) -> None:
         script = "; ".join(
             f"ip addr add {base}.{i}/16 dev eth0 2>/dev/null" for i in range(1, count + 1)
         )
         self.compose(["exec", "-T", service, "sh", "-c", script], timeout=120)
 
-    # -- capture ------------------------------------------------------------
     def start_capture(self, name: str = "live.pcap") -> subprocess.CompletedProcess:
         return self.compose(
             ["exec", "-d", "proxy", "tcpdump", "-i", "eth0", "-s", "0",
@@ -432,7 +359,6 @@ class LabRunner:
     def stop_capture(self) -> subprocess.CompletedProcess:
         return self.compose(["exec", "-T", "proxy", "pkill", "-f", "tcpdump"], timeout=30)
 
-    # -- traffic ------------------------------------------------------------
     def launch(self, service: str, mode: str, duration: int = 180,
                label: str = "live", ip_base: str | None = None,
                ip_count: int = 0, extra: list[str] | None = None) -> subprocess.CompletedProcess:
@@ -448,7 +374,6 @@ class LabRunner:
         for s in ("legit-loadgen", "slow-gen", "flood-gen"):
             self.compose(["exec", "-T", s, "pkill", "-f", "generate.py"], timeout=30)
 
-    # -- enforcement --------------------------------------------------------
     def write_limits(self, rate_conf: str, conn_conf: str) -> None:
         (self.repo / "proxy" / "limits" / "rate.conf").write_text(rate_conf)
         (self.repo / "proxy" / "limits" / "conn.conf").write_text(conn_conf)
@@ -458,7 +383,6 @@ class LabRunner:
             ["exec", "-T", "proxy", "sh", "-c", "nginx -t && nginx -s reload"],
             timeout=30,
         )
-
 
 RATE_CONF_ON = (
     "# written live by dashboard/live_lab.py — rate-class mechanism\n"
@@ -473,15 +397,10 @@ CONN_CONF_ON = (
     f"limit_conn addr {CONN_LIMIT};\n"
 )
 
-
-# ---------------------------------------------------------------------------
-# Feed helpers (the live monitor and the lab share this)
-# ---------------------------------------------------------------------------
 def append_feed(record: dict) -> None:
     FEED_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(FEED_PATH, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(record) + "\n")
-
 
 def read_feed(limit: int = 400) -> list[dict]:
     if not FEED_PATH.exists():
@@ -498,14 +417,11 @@ def read_feed(limit: int = 400) -> list[dict]:
                 pass
     return out
 
-
 def clear_feed() -> None:
     if FEED_PATH.exists():
         FEED_PATH.unlink()
 
-
 def truth_for(rec: dict, http: dict) -> str:
-    """Real ground truth from the generator's X-Ground-Truth header, else IP."""
     gt = http.get("ground_truth")
     role = GT_ROLE.get(gt) if gt else None
     if role is None:

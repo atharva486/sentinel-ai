@@ -1,53 +1,20 @@
 #!/usr/bin/env python3
-"""
-sensor.py — pcap -> raw flow records.
-
-WHY THIS FILE EXISTS
---------------------
-nginx access logs CANNOT see slow attacks. nginx logs a request when it
-COMPLETES. A Slowloris header never completes, so no log line is ever
-written. The signature of a slow attack (connection open, data trickling,
-nothing finished) is invisible to any completion-based logger.
-
-So we do not use nginx logs as the source of truth. We read the packet
-stream and reconstruct connections ourselves, including ones that never end.
-
-Two properties this file guarantees:
-
-  1. UNFINISHED FLOWS ARE EMITTED. Flows are flushed while still open
-     (flush_after_s) so a Slowloris flow that never closes still produces a
-     record. This is the single most important property in the file.
-
-  2. DIRECTION IS KNOWN. The side that sent the SYN is the client. We never
-     guess from payload.
-
-Capture with tcpdump on the proxy container's interface:
-
-    docker compose exec proxy tcpdump -i eth0 -w /captures/w.pcap \\
-        -s 0 'tcp port 80'
-
-Rotate per attack window (5s) so replay/processing stays bounded.
-"""
 from __future__ import annotations
-
 import argparse
 import json
 import socket
 from dataclasses import dataclass, field
 from pathlib import Path
-
 import dpkt
 
 SYN, ACK, FIN, RST, PSH = 0x02, 0x10, 0x01, 0x04, 0x08
 
-PAYLOAD_CAP = 65536        # bytes of payload kept per direction; totals are exact
+PAYLOAD_CAP = 65536
 DEFAULT_FLUSH_AFTER_S = 5.0
 DEFAULT_TAIL = 30.0
 
-
 @dataclass
 class FlowState:
-    """Accumulated state of one TCP connection, updated packet by packet."""
     flow_id: str
     client_ip: str
     client_port: int
@@ -56,10 +23,10 @@ class FlowState:
 
     t_syn: float | None = None
     t_synack: float | None = None
-    t_first: float = 0.0          # first byte seen in either direction
+    t_first: float = 0.0
     t_last: float = 0.0
     t_close: float | None = None
-    t_first_bwd: float = 0.0      # first BACKWARD data byte (HTTP response start)
+    t_first_bwd: float = 0.0
 
     fwd_bytes: int = 0
     fwd_pkts: int = 0
@@ -71,14 +38,12 @@ class FlowState:
     bwd_payload: bytearray = field(default_factory=bytearray)
 
     syn_retries: int = 0
-    closed_by: str = ""           # "client" | "server" | ""
+    closed_by: str = ""
     finalized: bool = False
 
-    # ---- convenience counters, filled during ingest ----
     n_requests_seen: int = 0
 
     def add(self, ts: float, direction: str, payload: bytes, flags: int) -> None:
-        """Fold one packet into this flow."""
         if self.t_first == 0.0:
             self.t_first = ts
         self.t_last = max(self.t_last, ts)
@@ -97,7 +62,6 @@ class FlowState:
             if len(self.bwd_payload) < PAYLOAD_CAP:
                 self.bwd_payload.extend(payload[: PAYLOAD_CAP - len(self.bwd_payload)])
 
-        # request-line detection on the forward direction only
         if direction == "fwd" and payload:
             self.n_requests_seen += count_request_lines(payload)
 
@@ -109,7 +73,6 @@ class FlowState:
             self.closed_by = "client" if direction == "fwd" else "server"
 
     def to_record(self) -> dict:
-        """Serialise to the raw form that features.py consumes."""
         return {
             "flow_id": self.flow_id,
             "client_ip": self.client_ip,
@@ -135,23 +98,10 @@ class FlowState:
             "n_requests_seen": self.n_requests_seen,
         }
 
-
 METHODS = (b"GET", b"POST", b"PUT", b"HEAD", b"DELETE", b"PATCH",
            b"OPTIONS", b"TRACE", b"CONNECT")
 
-
 def count_request_lines(buf: bytes) -> int:
-    """Count COMPLETE HTTP request lines in a payload chunk.
-
-    A request line only counts if it is terminated by CRLF, i.e. the pattern
-    "<METHOD> <path> HTTP/1.x\\r\\n".
-
-    The naive version counted any occurrence of b"GET ", so a Slowloris flow
-    trickling "GET /api/se..." one fragment at a time scored
-    requests_per_conn == 1 -- indistinguishable from a normal single-request
-    browser visit. Requiring the CRLF terminator is what makes an incomplete
-    request visible as incomplete.
-    """
     n = 0
     for method in METHODS:
         start = 0
@@ -160,26 +110,13 @@ def count_request_lines(buf: bytes) -> int:
             i = buf.find(needle, start)
             if i < 0:
                 break
-            # the line must contain " HTTP/1." and terminate with CRLF
             eol = buf.find(b"\r\n", i)
             if eol > 0 and b" HTTP/1." in buf[i:eol]:
                 n += 1
             start = i + len(needle)
     return n
 
-
 def parse_http(payload: bytes) -> dict:
-    """Minimal HTTP request parse. Deliberately tolerant.
-
-    Returns:
-      method, path, header_complete, header_bytes, declared_body,
-      req_count, ground_truth
-
-    header_complete is False when we never saw CRLFCRLF — which is exactly
-    the Slowloris case, and the single most discriminative field we have.
-
-    ground_truth is the value of X-Ground-Truth header if present, else None.
-    """
     end = payload.find(b"\r\n\r\n")
     header_complete = end >= 0
     head = payload[: end + 4] if header_complete else payload
@@ -201,11 +138,6 @@ def parse_http(payload: bytes) -> dict:
                 declared = int(ln.split(b":", 1)[1].strip())
             except ValueError:
                 declared = 0
-            # NOTE: do NOT break here. X-Ground-Truth is emitted AFTER
-            # Content-Length in POST requests, so an early break silently lost
-            # the per-flow label and fell back to the IP prefix. That only
-            # looked correct while every source-IP pool was class-pure; it
-            # mislabels a mixed-role IP (benign then attack from one address).
         elif low.startswith(b"x-ground-truth:"):
             ground_truth = ln.split(b":", 1)[1].strip().decode("latin-1")
 
@@ -219,10 +151,7 @@ def parse_http(payload: bytes) -> dict:
         "ground_truth": ground_truth,
     }
 
-
 class FlowTracker:
-    """Accumulates FlowState objects from a packet stream."""
-
     def __init__(self, flush_after_s: float = DEFAULT_FLUSH_AFTER_S):
         self.flush_after_s = flush_after_s
         self.flows: dict[tuple, FlowState] = {}
@@ -230,7 +159,6 @@ class FlowTracker:
 
     @staticmethod
     def _key(src, sport, dst, dport) -> tuple:
-        # direction-independent key so both halves land in the same flow
         a, b = (src, sport), (dst, dport)
         return (a, b) if a <= b else (b, a)
 
@@ -239,12 +167,9 @@ class FlowTracker:
         fs = self.flows.get(key)
 
         if fs is None:
-            # First packet we see for this connection defines client->server,
-            # unless it is a SYN-ACK, in which case the SYN we missed set it.
             is_syn = bool(flags & SYN) and not (flags & ACK)
             is_synack = bool(flags & SYN) and bool(flags & ACK)
             if is_synack:
-                # SYN was missed; infer client from the SYN-ACK's destination
                 c_ip, c_port, s_ip, s_port = dst, dport, src, sport
                 direction = "fwd"
             else:
@@ -282,11 +207,6 @@ class FlowTracker:
             fs.finalized = True
 
     def flush(self, now: float) -> list[FlowState]:
-        """Emit flows that are closed, or open and older than flush_after_s.
-
-        The second case is the important one: it is how a Slowloris flow that
-        never closes still becomes a usable record.
-        """
         out = []
         for key, fs in list(self.flows.items()):
             age = now - fs.t_last
@@ -302,24 +222,10 @@ class FlowTracker:
                 out.append(snapshot)
         return out
 
-
 def _unwrap(buf: bytes, linktype: int):
-    """Return an IPv4 packet from a frame, or None.
-
-    tcpdump reports three different link types depending on where you capture,
-    and getting this wrong silently yields zero flows — which reads as "no
-    attacks detected" rather than as an error. So all three are handled.
-
-      DLT_EN10MB    (1)   Ethernet — capturing on eth0
-      DLT_LINUX_SLL (113) "any" device, and Docker's veth interfaces
-      DLT_RAW       (101) loopback, and synthetic pcaps from tests
-    """
     if linktype == dpkt.pcap.DLT_EN10MB:
         ip = dpkt.ethernet.Ethernet(buf).data
     elif linktype == dpkt.pcap.DLT_LINUX_SLL:
-        # SLL header is 16 bytes. dpkt's parser exists but is picky about the
-        # header length field, so slice off the fixed prefix and parse the IP
-        # directly — fewer ways to fail silently.
         if len(buf) < 16:
             return None
         ip = dpkt.ip.IP(buf[16:])
@@ -332,13 +238,7 @@ def _unwrap(buf: bytes, linktype: int):
 
     return ip if isinstance(ip, dpkt.ip.IP) else None
 
-
 def read_pcap(path: Path, flush_after: float) -> list[dict]:
-    """Read a pcap file, return raw flow records.
-
-    Flows that never closed are still emitted (finalized=False). That is the
-    property that makes slow attacks visible at all.
-    """
     tracker = FlowTracker(flush_after_s=flush_after)
     records: list[dict] = []
     last_ts = 0.0
@@ -360,22 +260,18 @@ def read_pcap(path: Path, flush_after: float) -> list[dict]:
             if not isinstance(tcp, dpkt.tcp.TCP):
                 continue
 
-            # dpkt gives addresses as packed 4-byte strings; everything else
-            # (comparisons, JSON, Redis keys) wants dotted-quad text.
             src = socket.inet_ntoa(ip.src)
             dst = socket.inet_ntoa(ip.dst)
 
             tracker.ingest(ts, src, tcp.sport, dst, tcp.dport,
                            bytes(tcp.data), tcp.flags)
 
-        # end of capture: flush everything still open, once
         for fs in tracker.flush(last_ts + flush_after + 1.0):
             fs.finalized = False
             records.append(fs.to_record())
 
     records.sort(key=lambda r: r["t_first"])
     return records
-
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="pcap -> raw flow records (JSONL)")
