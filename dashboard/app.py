@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from sklearn.metrics import average_precision_score, roc_auc_score
 
 DASH_DIR = Path(__file__).resolve().parent
 REPO_ROOT = DASH_DIR.parent
@@ -509,10 +510,6 @@ with tab_live:
     source = ctl[3].selectbox(
         "Traffic stream", ["All flows", "Attacks only", "Benign only"]
     )
-    ctl[4].markdown(
-        "Runs on a live timer, so **the other tabs stay responsive.**  \n"
-        "Press ▶ to stream, ⏸ to hold, ⟲ to restart."
-    )
 
     if st.session_state.get("lm_source") != source:
         st.session_state.lm_source = source
@@ -562,7 +559,17 @@ def lab_body() -> None:
     if status:
         ctr = status.get("counters", {})
         lim = status.get("limits", {})
-        mm = st.columns(8)
+        # Compute ROC-AUC and PR-AUC from feed
+        y_true, y_score = [], []
+        for entry in feed:
+            truth = entry.get("truth")
+            score = entry.get("score")
+            if truth in ("attack", "benign") and score is not None:
+                y_true.append(1 if truth == "attack" else 0)
+                y_score.append(float(score))
+        roc_auc = roc_auc_score(y_true, y_score) if len(set(y_true)) == 2 else float("nan")
+        pr_auc = average_precision_score(y_true, y_score) if len(set(y_true)) == 2 else float("nan")
+        mm = st.columns(10)
         mm[0].metric("Decisions", f"{status.get('decisions', 0):,}")
         mm[1].metric("True positives", f"{ctr.get('tp', 0):,}")
         mm[2].metric("True negatives", f"{ctr.get('tn', 0):,}")
@@ -570,19 +577,16 @@ def lab_body() -> None:
         mm[4].metric("False negatives", f"{ctr.get('fn', 0):,}")
         mm[5].metric("Observing", f"{ctr.get('observing', 0):,}",
                      help="Open flows younger than 10 s — not yet judgeable.")
-        mm[6].metric("limit_req", "ON" if lim.get("rate") else "off")
-        mm[7].metric("limit_conn", "ON" if lim.get("conn") else "off")
+        mm[6].metric("ROC-AUC", f"{roc_auc:.3f}" if roc_auc == roc_auc else "n/a",
+                     help="Area under ROC curve (1.0 = perfect, 0.5 = random)")
+        mm[7].metric("PR-AUC", f"{pr_auc:.3f}" if pr_auc == pr_auc else "n/a",
+                     help="Area under Precision-Recall curve (1.0 = perfect)")
+        mm[8].metric("limit_req", "ON" if lim.get("rate") else "off")
+        mm[9].metric("limit_conn", "ON" if lim.get("conn") else "off")
 
     if not feed and not running:
         st.info("Press ▶ Start live demo to capture and score real packets.")
         return
-
-    st.markdown("**nginx limits the runner has written**")
-    lc1, lc2 = st.columns(2)
-    rate_txt = (REPO_ROOT / "proxy" / "limits" / "rate.conf").read_text()
-    conn_txt = (REPO_ROOT / "proxy" / "limits" / "conn.conf").read_text()
-    lc1.code(rate_txt.strip() or "# empty — no rate limit", language="nginx")
-    lc2.code(conn_txt.strip() or "# empty — no conn limit", language="nginx")
 
     docker_ok = LabRunner.docker_available()
     st.session_state.setdefault("lab_proc", None)
