@@ -19,7 +19,6 @@ for _p in (REPO_ROOT, REPO_ROOT / "m1_capture", REPO_ROOT / "m3_scoring"):
         sys.path.insert(0, str(_p))
 
 from m1_capture.features import (
-    CONCURRENCY_FEATURES,
     FEATURE_ORDER,
     RATE_FEATURES,
     STALL_FEATURES,
@@ -51,12 +50,10 @@ DATA_PATH = REPO_ROOT / "data" / "features.parquet"
 ARTIFACT_PATH = REPO_ROOT / "models" / "calibration_result_current.joblib"
 ABLATION_PATH = REPO_ROOT / "ablation_results.json"
 
-GROUP_ORDER = ["stall", "concurrency", "rate", "other"]
+GROUP_ORDER = ["stall", "rate"]
 GROUP_COLORS = {
     "stall": "#d1495b",
-    "concurrency": "#e08e0b",
     "rate": "#2d7ff9",
-    "other": "#94a3b8",
 }
 
 st.set_page_config(
@@ -88,12 +85,10 @@ def get_val_scores():
     cal = np.clip(art.calibrator.predict(raw), 0.0, 1.0)
     return val, raw, cal
 
-# Maps a feature name to its defence group (stall, concurrency, rate, or other).
+# Maps a feature name to its defence group (stall, rate, or other).
 def feature_group(name: str) -> str:
     if name in STALL_FEATURES:
         return "stall"
-    if name in CONCURRENCY_FEATURES:
-        return "concurrency"
     if name in RATE_FEATURES:
         return "rate"
     return "other"
@@ -212,7 +207,8 @@ with tab_flow:
          "The pcap is reassembled into per-connection flows (IP/port, timing, bytes, headers).",
          "m1_capture/sensor.py"),
         ("Features",
-         "16 features per flow, grouped by the defence they justify: stall, concurrency, rate.",
+         "16 features per flow, grouped by the defence they justify: stall and rate.",
+
          "m1_capture/features.py"),
         ("Detection",
          "XGBoost scores the flow: raw P(attack).",
@@ -245,28 +241,27 @@ with tab_flow:
     st.markdown("".join(html), unsafe_allow_html=True)
 
     st.divider()
-    st.subheader("Why the explanation matters")
+    st.subheader("How the defence is chosen")
     c1, c2 = st.columns([3, 2])
     with c1:
         st.markdown(
-            "A slowloris holds many sockets open while trickling bytes. Its "
-            "**request rate is low**, so a token-bucket rate limit never trips — "
-            "the attack sails straight through. The features that light up are "
-            "*stall* and *concurrency*, and those are exactly what `limit_conn` "
-            "plus a read timeout act on.\n\n"
-            "A flood is the opposite: high rate, few long-lived sockets. There the "
-            "SHAP mass sits in the *rate* group, and `limit_req` is the correct lever. "
-            "The switch reads the explanation, not a fixed rule."
+            "The score alone only says \"attack\". The explanation says *which kind*, "
+            "and the defence is picked to match.\n\n"
+            "Slowloris opens many connections and sends data slowly. Its request "
+            "rate stays low, so a rate limit never triggers; the stall features "
+            "point to `limit_conn`, which caps concurrent connections.\n\n"
+            "Floods do the opposite and send requests quickly, so `limit_req` is "
+            "the right fit. The rate features lead there.\n\n"
+            "The mechanism comes from the model's explanation, not a fixed rule."
         )
     with c2:
         st.markdown(
             f"**stall** — `{', '.join(sorted(STALL_FEATURES))}`\n\n"
-            f"**concurrency** — `{', '.join(sorted(CONCURRENCY_FEATURES))}`\n\n"
             f"**rate** — `{', '.join(sorted(RATE_FEATURES))}`"
         )
 
 with tab_results:
-    st.subheader("Held-out performance (sessions mix1–mix3)")
+    st.subheader("Held-out performance (sessions runf, rung)")
 
     from sklearn.metrics import average_precision_score, roc_auc_score
 

@@ -16,7 +16,7 @@ what you see is what the code actually does.
 | 🔀 **System flow** | The end-to-end pipeline: lab traffic → pcap → flows → 16 features → XGBoost → calibration → SHAP → mechanism → nginx. Plus *why* the explanation matters (a rate limit cannot stop a slowloris). |
 | 🔎 **Flow inspector** | Pick any of the 5,337 real flows. See its feature vector grouped by tier, the raw and calibrated scores, the per-feature SHAP bars, the SHAP mass per group, the mechanism the switch picks, and the nginx directives it would write. |
 | 🎯 **Adversarial** | Sliders for trickle interval / concurrency showing that evading detection (score < 0.30) costs the attacker the ability to do damage — plus the Module 5 hill-climbing result (using its offline simulation score, not the XGBoost model). |
-| 📊 **Model & results** | PR-AUC / ROC-AUC / ECE recomputed live on the held-out `mix1–mix3` sessions, the score distribution, and the 5-policy ablation. |
+| 📊 **Model & results** | PR-AUC / ROC-AUC / ECE recomputed live on the held-out `runf`/`rung` sessions, the score distribution, and the 5-policy ablation. |
 
 ## Files
 
@@ -144,6 +144,6 @@ takes precedence over the repository root), so the extra `streamlit` and
   Cloud it shows a notice and defers to the Live monitor.
 - Adversarial scoring uses Module 5's offline **simulation formula**
   (`_simulated_score`), not the XGBoost model — labelled as such in the UI.
-- Metrics are recomputed live on `mix1–mix3` from
+- Metrics are recomputed live on `runf`/`rung` from
   `calibration_result_candidate.joblib`, so they can never drift from the
   shipped artifact.

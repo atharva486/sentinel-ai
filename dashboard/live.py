@@ -180,15 +180,15 @@ def mechanism_kind(mech) -> str:
 
 
 PIPELINE = [
-    ("📡", "Traffic"),
-    ("🎥", "Capture"),
-    ("🧩", "Flows"),
-    ("🧮", "Features"),
-    ("🤖", "Detect"),
-    ("🎯", "Calibrate"),
-    ("🩻", "Explain"),
-    ("🔀", "Decide"),
-    ("🛡️", "Enforce"),
+    ("", "Traffic"),
+    ("", "Capture"),
+    ("", "Flows"),
+    ("", "Features"),
+    ("", "Detect"),
+    ("", "Calibrate"),
+    ("", "Explain"),
+    ("", "Decide"),
+    ("", "Enforce"),
 ]
 
 _PIPE_CSS = """
@@ -205,7 +205,7 @@ _PIPE_CSS = """
 .jp-stage{flex:1;border:1px solid rgba(120,150,180,.30);border-radius:9px;
   padding:9px 5px 7px;text-align:center;background:rgba(45,127,249,.05);}
 .jp-stage .ic{font-size:1.05rem;line-height:1;}
-.jp-stage b{display:block;font-size:.72rem;margin-top:3px;color:#123a5c;}
+.jp-stage b{display:block;font-size:.72rem;margin-top:3px;color:#e0e0e0;}
 .jp-stage.active{background:rgba(45,127,249,.22);border-color:#2d7ff9;}
 </style>
 """
