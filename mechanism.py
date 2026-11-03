@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 
-from m1_capture.features import CONCURRENCY_FEATURES, RATE_FEATURES, STALL_FEATURES
+from capture.features import CONCURRENCY_FEATURES, RATE_FEATURES, STALL_FEATURES
 
 SLOW_FEATURES = STALL_FEATURES | CONCURRENCY_FEATURES
 
@@ -19,7 +19,7 @@ class Mechanism:
     driver_group: str = ""
 
 
-# Maps a feature name to its defence group (stall, concurrency, rate, or other).
+# Maps a feature name to its defence group (stall, rate, or other).
 def group_of(name: str) -> str:
     if name in STALL_FEATURES:
         return "stall"

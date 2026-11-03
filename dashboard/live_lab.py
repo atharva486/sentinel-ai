@@ -35,10 +35,10 @@ from mechanism import (
     Mechanism,
     apply_profile_guard,
 )
-from m1_capture.features import WindowTracker, build_features
-from m1_capture.merge import GT_ROLE
-from m1_capture.sensor import parse_http
-from m2_triggers.stall import STALL_THRESHOLD_S, detect as detect_stall
+from capture.features import WindowTracker, build_features
+from capture.merge import GT_ROLE
+from capture.sensor import parse_http
+from triggers.stall import STALL_THRESHOLD_S, detect as detect_stall
 from schemas import FlowRecord
 
 ON_THRESHOLD = LADDER[1][0]

@@ -15,26 +15,26 @@ import numpy as np
 
 DASH_DIR = Path(__file__).resolve().parent
 REPO_ROOT = DASH_DIR.parent
-for _p in (REPO_ROOT, REPO_ROOT / "m1_capture", REPO_ROOT / "m3_scoring"):
+for _p in (REPO_ROOT, REPO_ROOT / "capture", REPO_ROOT / "scoring"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
 import dpkt
 
-from m1_capture import sensor
-from m1_capture.features import (
+from capture import sensor
+from capture.features import (
     FEATURE_ORDER,
     WindowTracker,
     build_features,
 )
-from m1_capture.merge import (
+from capture.merge import (
     ATTACK_IP_PREFIXES,
     BENIGN_IP_PREFIXES,
     CONTAINER_ROLE,
     GT_ROLE,
     role_for_ip,
 )
-from m3_scoring.calibrate import CalibrationResult
+from scoring.calibrate import CalibrationResult
 from mechanism import (
     CONN_LIMIT,
     Policy,

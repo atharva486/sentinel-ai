@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 import os
 sys.path.insert(0, os.path.abspath("."))
-sys.path.insert(0, os.path.abspath("./m1_capture"))
+sys.path.insert(0, os.path.abspath("./capture"))
 import numpy as np
 import pandas as pd
 from sklearn.isotonic import IsotonicRegression
@@ -136,7 +136,7 @@ def calibrate(model, X_cal, y_cal, feature_order=None):
     import sys
     import os
     sys.path.insert(0, os.path.abspath("."))
-    sys.path.insert(0, os.path.abspath("./m1_capture"))
+    sys.path.insert(0, os.path.abspath("./capture"))
 
     if feature_order is None:
         feature_order = FEATURE_ORDER
@@ -219,7 +219,7 @@ def reliability_diagram(model, X, y, n_bins=10, filepath=None):
 if __name__ == "__main__":
     import os
     sys.path.insert(0, os.path.abspath("."))
-    sys.path.insert(0, os.path.abspath("./m1_capture"))
+    sys.path.insert(0, os.path.abspath("./capture"))
 
     import xgboost as xgb
     import numpy as np

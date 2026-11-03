@@ -14,17 +14,17 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 
 DASH_DIR = Path(__file__).resolve().parent
 REPO_ROOT = DASH_DIR.parent
-for _p in (REPO_ROOT, REPO_ROOT / "m1_capture", REPO_ROOT / "m3_scoring"):
+for _p in (REPO_ROOT, REPO_ROOT / "capture", REPO_ROOT / "scoring"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from m1_capture.features import (
+from capture.features import (
     FEATURE_ORDER,
     RATE_FEATURES,
     STALL_FEATURES,
 )
-from m3_scoring.calibrate import CalibrationResult
-from m3_scoring.explain import explain, top_k
+from scoring.calibrate import CalibrationResult
+from scoring.explain import explain, top_k
 from mechanism import (
     DETECT_THRESHOLD,
     LADDER,
@@ -205,20 +205,20 @@ with tab_flow:
          "tcpdump -w /captures/run.pcap"),
         ("Flow records",
          "The pcap is reassembled into per-connection flows (IP/port, timing, bytes, headers).",
-         "m1_capture/sensor.py"),
+         "capture/sensor.py"),
         ("Features",
          "16 features per flow, grouped by the defence they justify: stall and rate.",
 
-         "m1_capture/features.py"),
+         "capture/features.py"),
         ("Detection",
          "XGBoost scores the flow: raw P(attack).",
-         "m3_scoring/train_xgb.py"),
+         "scoring/train_xgb.py"),
         ("Calibration",
          "Isotonic regression turns the raw score into a trustworthy probability.",
-         "m3_scoring/calibrate.py"),
+         "scoring/calibrate.py"),
         ("Explanation",
          "SHAP (TreeExplainer) attributes the score to individual features.",
-         "m3_scoring/explain.py"),
+         "scoring/explain.py"),
         ("Decision",
          "SHAP is summed per group; the winning group selects the mechanism.",
          "mechanism.py"),

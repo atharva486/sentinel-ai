@@ -106,7 +106,7 @@ if __name__ == "__main__":
 
     if len(sys.argv) != 5:
         print(
-            "Usage: python -m m3_scoring.train_xgb X_train.csv y_train.csv "
+            "Usage: python -m scoring.train_xgb X_train.csv y_train.csv "
             "X_val.csv y_val.csv"
         )
         sys.exit(2)
