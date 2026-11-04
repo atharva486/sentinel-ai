@@ -68,7 +68,7 @@
     },
     {
       "policy": "static_rate",
-      "scenario": "rudy",
+      "scenario": "Sloworis",
       "is_attack": true,
       "ground_truth": "limit_conn",
       "score": 0.88,
@@ -133,7 +133,7 @@
     },
     {
       "policy": "static_both",
-      "scenario": "rudy",
+      "scenario": "Sloworis",
       "is_attack": true,
       "ground_truth": "limit_conn",
       "score": 0.88,
@@ -198,7 +198,7 @@
     },
     {
       "policy": "trigger_rule",
-      "scenario": "rudy",
+      "scenario": "Sloworis",
       "is_attack": true,
       "ground_truth": "limit_conn",
       "score": 0.88,
@@ -263,7 +263,7 @@
     },
     {
       "policy": "shap_top1",
-      "scenario": "rudy",
+      "scenario": "Sloworis",
       "is_attack": true,
       "ground_truth": "limit_conn",
       "score": 0.88,
@@ -328,7 +328,7 @@
     },
     {
       "policy": "shap_group",
-      "scenario": "rudy",
+      "scenario": "Sloworis",
       "is_attack": true,
       "ground_truth": "limit_conn",
       "score": 0.88,

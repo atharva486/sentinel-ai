@@ -72,7 +72,7 @@ def get_features() -> pd.DataFrame:
 def get_val_scores():
     df = get_features()
     art = get_artifact()
-    val = df[df["session"].isin(["runf", "rung"])].copy()
+    val = df[df["session"].isin(["runb", "runf", "rung"])].copy()
     if val.empty:
         return val, np.array([]), np.array([])
     X = val[FEATURE_ORDER].to_numpy(dtype=float)
@@ -189,7 +189,7 @@ with tab_flow:
     st.subheader("How one request becomes a defence decision")
     stages = [
         ("Lab traffic",
-         "nginx proxy + three generators emit benign, slowloris/RUDY and flood traffic on an isolated network.",
+         "nginx proxy + three generators emit benign, slowloris/Sloworis and flood traffic on an isolated network.",
          "docker compose up -d"),
         ("Packet capture",
          "tcpdump records the wire on the proxy to a pcap.",
@@ -252,7 +252,7 @@ with tab_flow:
         )
 
 with tab_results:
-    st.subheader("Held-out performance (sessions runf, rung)")
+    st.subheader("Held-out performance (sessions runb, runf, rung)")
 
     from sklearn.metrics import average_precision_score, roc_auc_score
 
