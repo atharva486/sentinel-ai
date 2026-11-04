@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-from __future__ import annotations
 import argparse
 import json
 import os
@@ -7,13 +5,11 @@ import signal
 import sys
 import time
 from pathlib import Path
-
 DASH_DIR = Path(__file__).resolve().parent
 REPO_ROOT = DASH_DIR.parent
 for _p in (DASH_DIR, REPO_ROOT):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
-
 from live import (
     CONN_CONF_ON,
     FEED_PATH,
@@ -40,21 +36,14 @@ from capture.merge import GT_ROLE
 from capture.sensor import parse_http
 from triggers.stall import STALL_THRESHOLD_S, detect as detect_stall
 from schemas import FlowRecord
-
-ON_THRESHOLD = LADDER[1][0]
-OFF_THRESHOLD = LADDER[2][0]
-
-COUNT_THRESHOLD = DETECT_THRESHOLD
-
-OBSERVE_MIN_S = STALL_THRESHOLD_S
-
-STALL_REASONS_USED = ("header_incomplete", "body_incomplete", "slow_drip")
-
+ON_THRESHOLD = LADDER[1][0]  # 0.55
+OFF_THRESHOLD = LADDER[2][0]  # 0.46
+COUNT_THRESHOLD = DETECT_THRESHOLD  # 0.30
+OBSERVE_MIN_S = STALL_THRESHOLD_S  # 10 s
+STALL_REASONS_USED = ("header_incomplete", "body_incomplete", "slow_drip")  # 3 reasons used
 CAPTURE = "live.pcap"
-
 def log(msg: str) -> None:
     print(f"[live_lab {time.strftime('%H:%M:%S')}] {msg}", flush=True)
-
 def write_status(**kw) -> None:
     LAB_STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
     payload = {"updated": time.time()}
@@ -67,7 +56,6 @@ def write_status(**kw) -> None:
             pass
     payload.update(kw)
     LAB_STATUS_PATH.write_text(json.dumps(payload, indent=2))
-
 def stall_evidence(feats: dict, entity: str, flow_id: str, now: float):
     rec = FlowRecord(
         flow_id=str(flow_id),
@@ -104,7 +92,6 @@ def stall_evidence(feats: dict, entity: str, flow_id: str, now: float):
     if not used:
         return None
     return event, used
-
 def _stall_mechanism(reasons: list[str]) -> Mechanism:
     return Mechanism(
         conn_limit=CONN_LIMIT,
@@ -115,7 +102,6 @@ def _stall_mechanism(reasons: list[str]) -> Mechanism:
                 f"request has been open past {STALL_THRESHOLD_S:.0f}s. The model "
                 f"needs ~30s of flow age to see this; the rule sees it now."),
     )
-
 def main() -> int:
     ap = argparse.ArgumentParser(description="Real-time packet scoring in the lab")
     ap.add_argument("--duration", type=int, default=120,
@@ -145,24 +131,19 @@ def main() -> int:
                          "limit_conn (or vice-versa), the missing limit is added too "
                          "so a mis-attributed attack cannot slip through")
     args = ap.parse_args()
-
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
-
     if not LabRunner.docker_available():
         print("Docker is not available — cannot run the live lab.")
         write_status(running=False, error="docker unavailable")
         return 2
-
     runner = LabRunner()
     engine = LiveEngine()
-
     FEED_PATH.write_text("")
     write_status(running=True, mode=args.mode, started=time.time(),
                  duration=args.duration, pid=os.getpid(),
                  no_enforce=args.no_enforce,
                  decisions=0, flows_seen=0, counters={}, limits={"rate": False,
                  "conn": False})
-
     if not args.no_up:
         print("bringing the lab up ...")
         r = runner.up()
@@ -171,15 +152,12 @@ def main() -> int:
             write_status(running=False, error="compose up failed")
             return 3
     print("lab is up:", ", ".join(runner.running_names()) or "(none)")
-
     runner.write_limits("", "")
     runner.reload_nginx()
-
     print(f"adding source-IP pools ({args.ip_count} attack, {args.benign_count} benign) ...")
     runner.add_ip_pool("slow-gen", "172.18.16", args.ip_count)
     runner.add_ip_pool("flood-gen", "172.18.17", args.ip_count)
     runner.add_ip_pool("legit-loadgen", "172.18.15", args.benign_count)
-
     cap_name = "live_capture.pcap"
     cap_path = Path(runner.repo) / "captures" / cap_name
     if cap_path.exists():
@@ -187,7 +165,6 @@ def main() -> int:
     print("starting capture:", cap_path)
     runner.start_capture(cap_name)
     time.sleep(1.0)
-
     dur = args.duration + 5
     if args.mode in ("benign", "mixed") or args.also_benign:
         runner.launch("legit-loadgen", "benign", dur, label="livelab",
@@ -204,20 +181,17 @@ def main() -> int:
                       extra=["--flood", str(n_flood),
                              "--req-per-conn", str(args.req_per_conn)])
     print(f"traffic launched (mode={args.mode}, generators running {dur}s)")
-
     sensor = LiveSensor(cap_path)
     emitted: set = set()
     counted_flows: set = set()
     limits = {"rate": False, "conn": False}
     decisions = 0
     t0 = time.time()
-
     ON = ON_THRESHOLD
     OFF = OFF_THRESHOLD
     latest: dict = {}
     latest_mech: dict = {}
     latest_prof: dict = {}
-
     def confusion() -> dict:
         tp = fp = tn = fn = un = observe = 0
         for truth, score, final, age in latest.values():
@@ -233,12 +207,10 @@ def main() -> int:
                 un += 1
         return {"tp": tp, "fp": fp, "tn": tn, "fn": fn,
                 "unknown": un, "observing": observe}
-
     try:
         while time.time() - t0 < args.duration:
             flows = sensor.poll()
             now = sensor.latest_ts or time.time()
-
             win = WindowTracker(10.0)
             for fs in flows:
                 if fs.t_first <= 0:
@@ -246,7 +218,6 @@ def main() -> int:
                 win.on_connect(fs.client_ip, fs.t_first)
                 if fs.t_close is not None:
                     win.on_close(fs.client_ip, fs.t_close)
-
             for fs in flows:
                 if fs.t_first <= 0 or fs.fwd_bytes <= 0:
                     continue
@@ -259,14 +230,12 @@ def main() -> int:
                 emitted.add(key)
                 if len(emitted) > 200_000:
                     emitted.clear()
-
                 rec = fs.to_record()
                 http = parse_http(bytes.fromhex(rec["fwd_payload"]))
                 feats = build_features(rec, http, win, fs.client_ip, now)
                 res = engine.score(feats, fs.client_ip)
                 truth = (GT_ROLE.get(http.get("ground_truth"))
                          or role_for_ip(fs.client_ip) or "unknown")
-
                 model_score = float(res["calibrated"])
                 score = model_score
                 evidence = ""
@@ -279,7 +248,6 @@ def main() -> int:
                         res["top_group"] = "stall"
                         res["mechanism"] = _stall_mechanism(reasons)
                         res["action"] = engine.policy.decide(fs.client_ip, score)
-
                 rec_out = {
                     "i": decisions,
                     "ts": time.time(),
@@ -310,7 +278,6 @@ def main() -> int:
                     "concurrent_conns": int(feats.get("concurrent_conns", 0.0) or 0),
                     "stall": float(feats.get("stall_time_s", 0.0)),
                 }
-
             max_cal = max((s for _t, s, _f, _a in latest.values()), default=0.0)
             if args.no_enforce:
                 want_rate = want_conn = False
@@ -330,14 +297,12 @@ def main() -> int:
                 want_rate = want_conn = False
             else:
                 want_rate, want_conn = limits["rate"], limits["conn"]
-
             if (want_rate, want_conn) != (limits["rate"], limits["conn"]):
                 runner.write_limits(RATE_CONF_ON if want_rate else "",
                                     CONN_CONF_ON if want_conn else "")
                 rr = runner.reload_nginx()
                 print(f"[enforce] rate={want_rate} conn={want_conn} reload_ok={rr.returncode == 0}")
                 limits = {"rate": want_rate, "conn": want_conn}
-
             write_status(running=True, mode=args.mode, decisions=decisions,
                          flows_seen=len(flows), counters=confusion(),
                          limits=limits, updated=time.time())
@@ -359,6 +324,5 @@ def main() -> int:
                      counters=confusion(), limits=limits, updated=time.time())
     print(f"done: {decisions} decisions scored")
     return 0
-
 if __name__ == "__main__":
     raise SystemExit(main())

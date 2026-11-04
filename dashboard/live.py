@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-from __future__ import annotations
-
 import json
 import os
 import shutil
@@ -294,7 +291,6 @@ class LiveSensor:
 
 class LabRunner:
     SERVICES = ["proxy", "backend", "legit-loadgen", "slow-gen", "flood-gen"]
-
     def __init__(self, repo: Path = REPO_ROOT):
         self.repo = Path(repo)
 

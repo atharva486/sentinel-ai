@@ -48,7 +48,6 @@ sentinel-ai/
 ├── models/              # Trained calibration artifacts (.joblib files)
 ├── reports/             # Output reports and live decision logs
 ├── sandbox/             # Sandbox environment (Dockerfile)
-├── spec-code/           # Ablation study results (ablation_results.json)
 ├── mechanism.py         # SHAP → enforcement switch + policy ladder (root)
 ├── schemas.py           # Shared data contracts (FlowRecord, TriggerEvent, ScoreObject, ActionObject)
 ├── docker-compose.yaml  # Docker lab setup (proxy, backend, generators, redis)

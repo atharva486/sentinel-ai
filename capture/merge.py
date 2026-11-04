@@ -1,21 +1,19 @@
-﻿from __future__ import annotations
-import json
+﻿import json
 from pathlib import Path
 from typing import Dict
 import pandas as pd
 from .features import WindowTracker, build_features
 from .sensor import parse_http
-
 CONTAINER_ROLE: Dict[str, str] = {
     "172.18.0.5": "benign",
     "172.18.0.6": "attack",
     "172.18.0.7": "attack",
 }
 
-BENIGN_IP_PREFIXES: tuple[str, ...] = (
+BENIGN_IP_PREFIXES = (
     "172.18.15.", "172.18.25.", "172.18.35.", "172.18.45.",
 )
-ATTACK_IP_PREFIXES: tuple[str, ...] = (
+ATTACK_IP_PREFIXES= (
     "172.18.16.", "172.18.26.", "172.18.36.", "172.18.46.",
     "172.18.17.", "172.18.27.", "172.18.37.", "172.18.47.",
 )
@@ -39,7 +37,7 @@ def role_for_ip(ip) -> str | None:
             return "attack"
     return None
 
-def label_generated(flow_jsonl: str | Path) -> pd.DataFrame:
+def label_generated(flow_jsonl)->pd.DataFrame:
     p = Path(flow_jsonl)
     recs = []
     with p.open() as f:
@@ -47,10 +45,9 @@ def label_generated(flow_jsonl: str | Path) -> pd.DataFrame:
             line = line.strip()
             if line:
                 recs.append(json.loads(line))
-
     win = WindowTracker(window_s=10.0)
 
-    parsed: list[tuple[dict, dict, str, str]] = []
+    parsed = []
     for r in recs:
         try:
             http = parse_http(bytes.fromhex(r["fwd_payload"]))
@@ -105,5 +102,4 @@ def label_generated(flow_jsonl: str | Path) -> pd.DataFrame:
     return df
 
 if __name__ == "__main__":
-    print("merge.py ready. IPs are pinned in docker-compose.yaml; "
-          "CONTAINER_ROLE must match them.")
+    print("Data is ready to be merged.")

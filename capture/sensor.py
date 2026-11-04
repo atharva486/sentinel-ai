@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-from __future__ import annotations
 import argparse
 import json
 import socket
@@ -8,7 +6,6 @@ from pathlib import Path
 import dpkt
 
 SYN, ACK, FIN, RST, PSH = 0x02, 0x10, 0x01, 0x04, 0x08
-
 PAYLOAD_CAP = 65536
 DEFAULT_FLUSH_AFTER_S = 5.0
 DEFAULT_TAIL = 30.0
@@ -20,24 +17,23 @@ class FlowState:
     client_port: int
     server_ip: str
     server_port: int
-
-    t_syn: float | None = None
-    t_synack: float | None = None
-    t_first: float = 0.0
-    t_last: float = 0.0
-    t_close: float | None = None
+    t_syn: float|None = None
+    t_synack: float|None = None
+    t_first: float=0.0
+    t_last: float=0.0
+    t_close: float|None = None
     t_first_bwd: float = 0.0
 
-    fwd_bytes: int = 0
-    fwd_pkts: int = 0
-    bwd_bytes: int = 0
-    bwd_pkts: int = 0
+    fwd_bytes: int= 0
+    fwd_pkts: int= 0
+    bwd_bytes: int= 0
+    bwd_pkts: int= 0
 
-    fwd_times: list[float] = field(default_factory=list)
-    fwd_payload: bytearray = field(default_factory=bytearray)
-    bwd_payload: bytearray = field(default_factory=bytearray)
+    fwd_times: list[float] =field(default_factory=list)
+    fwd_payload: bytearray =field(default_factory=bytearray)
+    bwd_payload: bytearray =field(default_factory=bytearray)
 
-    syn_retries: int = 0
+    syn_retries: int= 0
     closed_by: str = ""
     finalized: bool = False
 
@@ -176,9 +172,9 @@ class FlowTracker:
                 c_ip, c_port, s_ip, s_port = src, sport, dst, dport
                 direction = "fwd"
                 if is_syn:
-                    fs_t_syn = ts
+                    fs_t_syn= ts
                 else:
-                    fs_t_syn = None
+                    fs_t_syn=None
             fs = FlowState(
                 flow_id=f"{c_ip}:{c_port}-{s_ip}:{s_port}",
                 client_ip=c_ip, client_port=c_port,
@@ -233,9 +229,7 @@ def _unwrap(buf: bytes, linktype: int):
         ip = dpkt.ip.IP(buf)
     else:
         raise SystemExit(
-            f"unsupported pcap link type {linktype}; capture with "
-            "'tcpdump -i eth0' (Ethernet), '-i any' (SLL) or build DLT_RAW")
-
+            f"unsupported pcap link type {linktype};")
     return ip if isinstance(ip, dpkt.ip.IP) else None
 
 def read_pcap(path: Path, flush_after: float) -> list[dict]:
@@ -247,10 +241,8 @@ def read_pcap(path: Path, flush_after: float) -> list[dict]:
         try:
             reader = dpkt.pcap.Reader(fh)
         except (ValueError, dpkt.dpkt.UnpackError) as exc:
-            raise SystemExit(f"{path}: not a readable pcap ({exc})") from exc
-
+            raise SystemExit(f"{path}: not readable ({exc})") from exc
         linktype = reader.datalink()
-
         for ts, buf in reader:
             last_ts = ts
             ip = _unwrap(buf, linktype)
@@ -265,7 +257,6 @@ def read_pcap(path: Path, flush_after: float) -> list[dict]:
 
             tracker.ingest(ts, src, tcp.sport, dst, tcp.dport,
                            bytes(tcp.data), tcp.flags)
-
         for fs in tracker.flush(last_ts + flush_after + 1.0):
             fs.finalized = False
             records.append(fs.to_record())
@@ -279,7 +270,6 @@ def main() -> None:
     ap.add_argument("-o", "--out", type=Path, default=Path("flows.jsonl"))
     ap.add_argument("--flush-after", type=float, default=DEFAULT_FLUSH_AFTER_S)
     args = ap.parse_args()
-
     recs = read_pcap(args.pcap, args.flush_after)
     with args.out.open("w", encoding="utf-8") as fh:
         for r in recs:
@@ -287,7 +277,6 @@ def main() -> None:
 
     fin = sum(1 for r in recs if r["finalized"])
     print(f"{len(recs)} flow records ({fin} finalized, {len(recs)-fin} mid-flight)")
-    print(f"-> {args.out}")
 
 
 if __name__ == "__main__":

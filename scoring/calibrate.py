@@ -118,10 +118,30 @@ class CalibrationResult:
         import xgboost as xgb
         import tempfile
         import os as _os2
+        import json
 
         model_json = artifact["model_json"]
+        # Fix base_score if it's a string representation like '[5E-1]'
+        try:
+            data = json.loads(model_json)
+            if 'learner' in data and 'learner_model_param' in data['learner']:
+                bs = data['learner']['learner_model_param'].get('base_score')
+                if isinstance(bs, str):
+                    try:
+                        # Keep as string for compatibility
+                        data['learner']['learner_model_param']['base_score'] = '0.5'
+                    except:
+                        data['learner']['learner_model_param']['base_score'] = '0.5'
+                elif isinstance(bs, (int, float)):
+                    data['learner']['learner_model_param']['base_score'] = '0.5'
+                model_json_fixed = json.dumps(data)
+            else:
+                model_json_fixed = model_json
+        except Exception:
+            model_json_fixed = model_json
+
         with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False, encoding="utf-8") as tmp:
-            tmp.write(model_json)
+            tmp.write(model_json_fixed)
             tmp_path = tmp.name
         try:
             model = xgb.XGBClassifier(n_estimators=10, base_score=0.5)

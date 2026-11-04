@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-from __future__ import annotations
+
 import argparse
 import asyncio
 import random
@@ -9,18 +8,15 @@ LAB_HOST = "proxy"
 LAB_PORT = 80
 SRC_IPS: list[str] = []
 
-# Opens a TCP connection, optionally pinned to a specific source IP.
 async def _connect(src_ip: str | None = None):
     if src_ip:
         return await asyncio.open_connection(
             LAB_HOST, LAB_PORT, local_addr=(src_ip, 0))
     return await asyncio.open_connection(LAB_HOST, LAB_PORT)
 
-# Builds the ground-truth header embedded in every request for per-flow labelling.
 def _gt_header(gt_label: str) -> bytes:
     return f"X-Ground-Truth: {gt_label}\r\n".encode()
 
-# Simulates a realistic browser session with reconnects and slow but finite uploads.
 async def benign_worker(agent: int, duration: int, think_lo: float,
                         think_hi: float, slow_fraction: float = 0.15,
                         stagger: float = 0.0, src_ip: str | None = None,
@@ -104,7 +100,6 @@ async def benign_worker(agent: int, duration: int, think_lo: float,
         await asyncio.sleep(random.uniform(0.05, 0.4))
 
 
-# Simulates a Slowloris attack that never terminates its HTTP header.
 async def slowloris_worker(conn_id: int, duration: int,
                            keepalive_interval: float = 1.0,
                            stagger: float = 0.0, src_ip: str | None = None):
@@ -128,7 +123,6 @@ async def slowloris_worker(conn_id: int, duration: int,
     writer.close()
 
 
-# Simulates a high-rate HTTP flood using keep-alive connections.
 async def flood_worker(conn_id: int, duration: int, req_per_conn: int = 200,
                        stagger: float = 0.0, src_ip: str | None = None):
     if stagger > 0:
@@ -154,13 +148,11 @@ async def flood_worker(conn_id: int, duration: int, req_per_conn: int = 200,
         await asyncio.sleep(random.uniform(0.03, 0.06))
     writer.close()
 
-# Picks this worker's source IP from the container's pool.
 def _ip_for(i: int) -> str | None:
     if not SRC_IPS:
         return None
     return SRC_IPS[i % len(SRC_IPS)]
 
-# Runs benign, slowloris, and flood workers from this container.
 async def run_mix(duration: int, n_benign: int, n_slow: int, n_flood: int,
                   label: str, stagger: float | None = None,
                   req_per_conn: int = 200):
@@ -180,7 +172,6 @@ async def run_mix(duration: int, n_benign: int, n_slow: int, n_flood: int,
           f"{n_flood} flood, for {duration}s")
     await asyncio.gather(*tasks, return_exceptions=True)
 
-# Runs a benign-only traffic generation to measure false-positive rate.
 async def run_benign_only(duration: int, n_benign: int, label: str,
                           stagger: float | None = None):
     if stagger is None:
@@ -228,20 +219,17 @@ MIXED_PROFILES = [
     "slow_and_flood",
 ]
 
-# Runs one worker phase with a timeout so it cannot hang the whole IP.
 async def _bounded(coro, timeout: float):
     try:
         return await asyncio.wait_for(coro, timeout=timeout)
     except Exception:
         return None
 
-# Sleeps for a delay then runs a coroutine.
 async def _after(delay: float, coro):
     if delay > 0:
         await asyncio.sleep(delay)
     return await coro
 
-# Runs one source IP through a real-world attack profile.
 async def mixed_ip_worker(i: int, profile: str, duration: int,
                           req_per_conn: int = 50, src_ip: str | None = None):
     half = max(1, duration // 2)
@@ -289,7 +277,6 @@ async def run_mixed(duration: int, n_ips: int, label: str, req_per_conn: int = 5
           f"{duration}s (per-flow labels via X-Ground-Truth)")
     await asyncio.gather(*tasks, return_exceptions=True)
 
-# Parses CLI args and dispatches to the selected traffic generation mode.
 def main() -> None:
     ap = argparse.ArgumentParser(
         description="Generate labelled L7 attack traffic against the lab proxy")

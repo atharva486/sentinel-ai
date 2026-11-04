@@ -1,8 +1,4 @@
-#!/usr/bin/env python3
-from __future__ import annotations
-
 import math
-
 RATE_FEATURES = frozenset({
     "bytes_in_per_s",
     "requests_per_s",
@@ -63,7 +59,7 @@ EXCLUDED = {
 }
 
 
-def _safe_div(a: float, b: float, default: float = 0.0) -> float:
+def _safe_div(a: float, b: float, default = 0.0) -> float:
     return a / b if b else default
 
 
@@ -168,7 +164,6 @@ class WindowTracker:
             "concurrent_conns":        float(live),
             "conns_per_second_opened": opened / span,
         }
-
 
 def build_features(rec: dict, http: dict, window: WindowTracker,
                    entity: str, now: float) -> dict:

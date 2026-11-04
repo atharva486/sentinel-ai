@@ -20,8 +20,8 @@ class FlowRecord:
     bytes_out: int = 0
     req_count: int = 0
     conn_id: str = ""
-    ja3: Optional[str] = None
-    ja4: Optional[str] = None
+    # ja3: Optional[str] = None
+    # ja4: Optional[str] = None
     bytes_in_per_s: float = 0.0
     bytes_out_per_s: float = 0.0
     requests_per_s: float = 0.0
@@ -61,7 +61,7 @@ class ScoreObject:
     model_version: str
     shap_values: dict
     shap_top_k: list
-    tcn_score: Optional[float] = None
+    # tcn_score: Optional[float] = None
     trigger_context: Optional[TriggerEvent] = None
 
 
