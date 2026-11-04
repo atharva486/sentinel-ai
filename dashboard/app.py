@@ -60,17 +60,14 @@ st.set_page_config(
     layout="wide",
 )
 
-# Loads the saved detection model and calibrator.
 @st.cache_resource
 def get_artifact() -> CalibrationResult:
     return CalibrationResult.load(str(ARTIFACT_PATH))
 
-# Reads the labelled flow data from parquet.
 @st.cache_data
 def get_features() -> pd.DataFrame:
     return pd.read_parquet(DATA_PATH)
 
-# Returns raw and calibrated scores for held-out runs.
 @st.cache_data
 def get_val_scores():
     df = get_features()
@@ -83,7 +80,6 @@ def get_val_scores():
     cal = np.clip(art.calibrator.predict(raw), 0.0, 1.0)
     return val, raw, cal
 
-# Maps a feature name to its defence group (stall, rate, or other).
 def feature_group(name: str) -> str:
     if name in STALL_FEATURES:
         return "stall"
@@ -91,7 +87,6 @@ def feature_group(name: str) -> str:
         return "rate"
     return "other"
 
-# Computes calibration error across probability bins.
 def expected_calibration_error(y, p, n_bins: int = 10) -> float:
     y = np.asarray(y, dtype=float)
     p = np.asarray(p, dtype=float)
@@ -105,7 +100,6 @@ def expected_calibration_error(y, p, n_bins: int = 10) -> float:
         ece += mask.mean() * abs(y[mask].mean() - p[mask].mean())
     return float(ece)
 
-# Turns a score into a policy action like forward, throttle, block, or quarantine.
 def policy_band(score: float) -> str:
     if score >= LADDER[0][0]:
         return "quarantine"
@@ -115,7 +109,6 @@ def policy_band(score: float) -> str:
         return "throttle"
     return "forward"
 
-# Builds nginx limit directives from a mechanism decision.
 def nginx_directives(mech) -> str:
     lines = []
     if mech.conn_limit is not None:
@@ -160,7 +153,7 @@ df_all = get_features()
 st.markdown(
     f"""
     <div class="hero">
-      <h1>🛡️ Sentinel-AI — Explainable L7 Denial-of-Service Defence</h1>
+      <h1>Sentinel-AI — Explainable L7 Denial-of-Service Defence</h1>
       <p>Reads <b>why</b> the model flagged a flow (SHAP) and lets the reason pick the
       defence — a rate limit is useless against a slowloris, so the explanation
       chooses <code>limit_conn&nbsp;+&nbsp;timeouts</code> instead. Live view over
@@ -185,10 +178,10 @@ top[4].metric("Feature tiers", "3")
     tab_results,
 ) = st.tabs(
     [
-        "▶️ Live monitor",
-        "🧪 Live lab",
-        "🔀 System flow",
-        "📊 Model & results",
+        " Live monitor",
+        " Live lab",
+        "System flow",
+        "Model & results",
     ]
 )
 
@@ -270,7 +263,6 @@ with tab_results:
     roc_c = roc_auc_score(y, cal_v)
     ece_c = expected_calibration_error(y, cal_v)
 
-    # Calculates true positives, true negatives, false positives, and false negatives.
     def _confusion(scores: np.ndarray) -> tuple[int, int, int, int]:
         pred = scores >= DETECT_THRESHOLD
         tp = int(((pred) & (y == 1)).sum())
@@ -316,12 +308,10 @@ with tab_results:
                       margin=dict(l=10, r=10, t=20, b=10))
     st.plotly_chart(fig, width="stretch")
 
-# Creates a cached live scoring engine for captured flows.
 @st.cache_resource
 def get_live_engine() -> LiveEngine:
     return LiveEngine(ARTIFACT_PATH)
 
-# Orders every captured flow by session and time with its features.
 @st.cache_data
 def get_monitor_order() -> list:
     df = get_features().sort_values(["session", "t"], kind="stable")
@@ -339,12 +329,10 @@ def get_monitor_order() -> list:
         )
     return rows
 
-# Scores all captured flows using the shipped model and calibrator.
 @st.cache_data(show_spinner="Scoring captured flows with the shipped model…")
 def get_monitor_scored() -> list:
     return get_live_engine().score_dataset(get_monitor_order())
 
-# Filters flows by traffic stream: all, attacks only, or benign only.
 def _active_stream(order: list, source: str) -> list:
     if source == "Attacks only":
         return [r for r in order if r["y"] == 1]
@@ -352,7 +340,6 @@ def _active_stream(order: list, source: str) -> list:
         return [r for r in order if r["y"] == 0]
     return order
 
-# Counts defence actions and true/false positives across flows.
 def _action_totals(rows: list) -> tuple[dict, int, int]:
     acts = {"forward": 0, "throttle": 0, "block": 0, "quarantine": 0}
     tp = fp = 0
@@ -365,7 +352,6 @@ def _action_totals(rows: list) -> tuple[dict, int, int]:
                 fp += 1
     return acts, tp, fp
 
-# Renders the live monitor fragment with scores, gauges, and charts.
 @st.fragment(run_every=0.5)
 def live_body(active: list, speed: int) -> None:
     n = len(active)
@@ -410,7 +396,7 @@ def live_body(active: list, speed: int) -> None:
         band = policy_band(cur["score"])
         badge = {"forward": "🟢", "throttle": "🟡", "block": "🟠",
                  "quarantine": "🔴"}[cur["action"]]
-        flag = "✅ correct" if (cur["truth"] == "attack") == (cur["score"] >= DETECT_THRESHOLD) else "⚠️ miss"
+        flag = "correct" if (cur["truth"] == "attack") == (cur["score"] >= DETECT_THRESHOLD) else "⚠️ miss"
         st.markdown(
             f"{badge} `{cur['entity']}` · signature **{cur['profile']}** · "
             f"truth **{cur['truth']}** · session `{cur['session']}` · {flag}  \n"
@@ -511,7 +497,6 @@ with tab_live:
 
     live_body(_active_stream(order, source), speed)
 
-# Reads the most recent lines from the live decisions feed file.
 def _read_feed(path: Path, limit: int = 500) -> list:
     if not path.exists():
         return []
@@ -525,7 +510,6 @@ def _read_feed(path: Path, limit: int = 500) -> list:
                 pass
     return out
 
-# Safely reads a JSON file, returning an empty dict if missing or bad.
 def _read_json(path: Path) -> dict:
     if not path.exists():
         return {}
@@ -534,7 +518,6 @@ def _read_json(path: Path) -> dict:
     except Exception:
         return {}
 
-# Refreshes the live lab display with container status and decisions.
 @st.fragment(run_every=2.0)
 def lab_body() -> None:
     runner = LabRunner()
