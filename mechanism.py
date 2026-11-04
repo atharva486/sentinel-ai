@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
@@ -19,7 +17,6 @@ class Mechanism:
     driver_group: str = ""
 
 
-# Maps a feature name to its defence group (stall, rate, or other).
 def group_of(name: str) -> str:
     if name in STALL_FEATURES:
         return "stall"
@@ -63,7 +60,6 @@ class Policy:
         return LADDER[current][2]
 
 
-# Applies a static rate-limit policy to every flow.
 def choose_static(score: float) -> Mechanism:
     return Mechanism(rate_limit=RATE_LIMIT,
                      reason="static policy: always limit_req",
@@ -79,14 +75,12 @@ TRIGGER_TO_GROUP = {
 }
 
 
-# Chooses a mechanism based on the trigger name that fired.
 def choose_by_trigger(trigger: str | None, score: float) -> Mechanism:
     grp = TRIGGER_TO_GROUP.get(trigger or "", "unclear")
     return _mechanism_for_group(grp, score,
                                 f"trigger '{trigger}' indicates {grp}")
 
 
-# Chooses a mechanism based on the single highest-magnitude SHAP feature.
 def choose_by_shap_top1(shap_top_k: list, score: float) -> Mechanism:
     if not shap_top_k:
         return choose_static(score)
@@ -102,7 +96,6 @@ def choose_by_shap_top1(shap_top_k: list, score: float) -> Mechanism:
                                 f"top SHAP feature '{name}' ({val:+.3f})")
 
 
-# Sums SHAP values per feature group.
 def shap_group_scores(shap_values: dict) -> dict:
     out = defaultdict(float)
     for name, val in shap_values.items():
@@ -110,7 +103,6 @@ def shap_group_scores(shap_values: dict) -> dict:
     return dict(out)
 
 
-# Chooses a mechanism based on SHAP summed per feature group.
 def choose_by_shap_group(shap_values: dict, score: float) -> Mechanism:
     if not shap_values:
         return choose_static(score)
@@ -123,7 +115,6 @@ def choose_by_shap_group(shap_values: dict, score: float) -> Mechanism:
         f"leading feature '{top_feat}')")
 
 
-# Builds a mechanism for a given feature group.
 def _mechanism_for_group(grp: str, score: float, why: str) -> Mechanism:
     if grp in ("stall", "concurrency"):
         return Mechanism(conn_limit=CONN_LIMIT, timeout_s=10.0,
@@ -138,8 +129,6 @@ def _mechanism_for_group(grp: str, score: float, why: str) -> Mechanism:
                      timeout_s=15.0, driver_group="unclear", driver=why,
                      reason=f"{why} -> unclear. Applying moderate limits to both.")
 
-
-# Checks whether a mechanism contains a given attack profile.
 def contains(mech: Mechanism, profile: dict) -> tuple[bool, str]:
     if mech.conn_limit is not None and mech.rate_limit is None:
         if profile["concurrent_conns"] > 1 or profile["stall"] > 5.0:
@@ -157,7 +146,6 @@ def contains(mech: Mechanism, profile: dict) -> tuple[bool, str]:
     return False, "both limits applied but attack below every threshold"
 
 
-# Cross-checks a chosen mechanism against a flow's measured profile and adds missing limits.
 def apply_profile_guard(mech: Mechanism, profile: dict) -> Mechanism:
     contained, _why = contains(mech, profile)
     if contained:
