@@ -40,11 +40,55 @@ from m1_capture.merge import load_side_log, _side_log_index, _match_side_log
 
 REPO = Path(__file__).resolve().parent.parent
 CAPTURES = REPO / "captures"
-SIDE_LOG = REPO / "results" / "baseline_v0" / "side_log.jsonl"
+RUNS = REPO / "reports" / "runs"
 OUT = REPO / "data" / "features_snapshots.parquet"
 
 AS_OF_SECONDS = [1.0, 2.0, 3.0, 5.0, 10.0, 20.0]
 PAYLOAD_CAP = 65536
+
+
+def find_matching_side_log(pcap_path: Path) -> Path | None:
+    """Find the side_log whose time range overlaps with the pcap.
+
+    Returns the side_log.jsonl path for the run directory whose start/end
+    timestamps overlap with the pcap's first/last packet timestamps.
+    """
+    # Get pcap time range
+    pcap_first = None
+    pcap_last = None
+    with pcap_path.open("rb") as fh:
+        try:
+            reader = dpkt.pcap.Reader(fh)
+        except (ValueError, dpkt.dpkt.UnpackError):
+            return None
+        for ts, buf in reader:
+            if pcap_first is None:
+                pcap_first = ts
+            pcap_last = ts
+
+    if pcap_first is None:
+        return None
+
+    # Check each run directory
+    if not RUNS.exists():
+        return None
+    for run_dir in sorted(RUNS.iterdir()):
+        side_log = run_dir / "side_log.jsonl"
+        if not side_log.exists():
+            continue
+        try:
+            import json
+            rows = [json.loads(l) for l in side_log.open() if l.strip()]
+            if not rows:
+                continue
+            sl_first = min(r["start_ts"] for r in rows)
+            sl_last = max(r["end_ts"] for r in rows)
+            # Check overlap
+            if sl_first <= pcap_last + 5 and sl_last >= pcap_first - 5:
+                return side_log
+        except Exception:
+            continue
+    return None
 
 # --- Legacy labeling (historical data only; never used for new traffic) ---
 # These are the pre-Phase-1 mappings, used solely to label old pcaps as
@@ -280,20 +324,22 @@ def replay_pcap(pcap_path, side_idx, is_baseline):
 
 
 def main():
-    side_idx = load_side_truth() if SIDE_LOG.exists() else None
-    print(f"Side-log: {'loaded' if side_idx else 'NOT available (legacy labels)'}")
-    if side_idx:
-        print(f"Side-log rows: {len(load_side_log(SIDE_LOG))}")
-
     all_rows: list[dict] = []
     pcaps = sorted(CAPTURES.glob("*.pcap"))
     print(f"Found {len(pcaps)} pcaps")
 
     for pcap in pcaps:
         is_baseline = pcap.name == "live_capture.pcap"
-        idx = side_idx if (is_baseline and side_idx) else None
-        print(f"Replaying {pcap.name} (baseline={is_baseline}, side_log={idx is not None}) ...")
-        rows = replay_pcap(pcap, idx, is_baseline)
+        side_log_path = find_matching_side_log(pcap) if is_baseline else None
+        side_idx = None
+        if side_log_path:
+            side_rows = load_side_log(side_log_path)
+            side_idx = _side_log_index(side_rows)
+            print(f"  Side log: {side_log_path} ({len(side_rows)} rows)")
+        else:
+            print(f"  Side log: NOT available (legacy labels)")
+        print(f"Replaying {pcap.name} (baseline={is_baseline}, side_log={side_idx is not None}) ...")
+        rows = replay_pcap(pcap, side_idx, is_baseline)
         print(f"  {len(rows):,} snapshot rows")
         all_rows.extend(rows)
 
