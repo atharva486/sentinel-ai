@@ -69,7 +69,7 @@ async def benign_worker(agent: int, duration: int, think_lo: float,
                     f"Host: api\r\n"
                     f"User-Agent: Mozilla/5.0\r\n"
                     f"Content-Length: {body_len}\r\n"
-                    f"Content-Type: multipart/form-data\r\n").encode()
+                    f"Content-Type: multipart/form-data\r\n\r\n").encode()
             stats["requests_attempted"] = stats.get("requests_attempted", 0) + 1
             try:
                 if slow:
