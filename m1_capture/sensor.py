@@ -130,7 +130,6 @@ def parse_http(payload: bytes) -> dict:
             path = parts[1].decode("latin-1")
 
     declared = 0
-    ground_truth = None
     for ln in lines[1:]:
         low = ln.lower()
         if low.startswith(b"content-length:"):
@@ -138,8 +137,6 @@ def parse_http(payload: bytes) -> dict:
                 declared = int(ln.split(b":", 1)[1].strip())
             except ValueError:
                 declared = 0
-        elif low.startswith(b"x-ground-truth:"):
-            ground_truth = ln.split(b":", 1)[1].strip().decode("latin-1")
 
     return {
         "method": method,
@@ -148,7 +145,6 @@ def parse_http(payload: bytes) -> dict:
         "header_bytes": (end + 4) if header_complete else len(payload),
         "declared_body": declared,
         "req_count": count_request_lines(payload),
-        "ground_truth": ground_truth,
     }
 
 class FlowTracker:

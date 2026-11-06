@@ -27,13 +27,6 @@ from m1_capture.features import (
     WindowTracker,
     build_features,
 )
-from m1_capture.merge import (
-    ATTACK_IP_PREFIXES,
-    BENIGN_IP_PREFIXES,
-    CONTAINER_ROLE,
-    GT_ROLE,
-    role_for_ip,
-)
 from m3_scoring.calibrate import CalibrationResult
 from mechanism import (
     CONN_LIMIT,
@@ -256,11 +249,11 @@ class PcapTail:
         return out
 
 class LiveSensor:
-    CLIENT_PREFIXES = tuple(
-        list(BENIGN_IP_PREFIXES)
-        + list(ATTACK_IP_PREFIXES)
-        + list(CONTAINER_ROLE.keys())
-    )
+    # With labels moved off the wire (side log), the live sensor no longer
+    # knows client IPs from role-pinned prefixes.  An empty prefix list means
+    # "accept every flow"; the FlowTracker still assigns client/server from the
+    # TCP SYN, so direction is correct without any IP allowlist.
+    CLIENT_PREFIXES: tuple[str, ...] = ()
 
     def __init__(self, pcap_path: Path, client_prefixes: tuple[str, ...] | None = None,
                  flush_after_s: float = 5.0):
@@ -272,7 +265,8 @@ class LiveSensor:
                                 else self.CLIENT_PREFIXES)
 
     def is_client(self, ip: str) -> bool:
-        return ip.startswith(self.client_prefixes)
+        # Empty prefix list => accept all flows.
+        return not self.client_prefixes or ip.startswith(self.client_prefixes)
 
     def poll(self) -> list:
         for ts, buf in self.tail.read_new():
@@ -290,7 +284,7 @@ class LiveSensor:
             self.packets += 1
             self.latest_ts = max(self.latest_ts, ts)
         return [fs for fs in self.store.flows.values()
-                if fs.client_ip.startswith(self.client_prefixes)]
+                if self.is_client(fs.client_ip)]
 
 class LabRunner:
     SERVICES = ["proxy", "backend", "legit-loadgen", "slow-gen", "flood-gen"]
@@ -422,8 +416,6 @@ def clear_feed() -> None:
         FEED_PATH.unlink()
 
 def truth_for(rec: dict, http: dict) -> str:
-    gt = http.get("ground_truth")
-    role = GT_ROLE.get(gt) if gt else None
-    if role is None:
-        role = role_for_ip(rec.get("client_ip"))
-    return role or "unknown"
+    # Labels now live in the side log (off the wire), not in the traffic.  The
+    # live sensor has no side log, so per-flow truth is unavailable here.
+    return "unlabelled"

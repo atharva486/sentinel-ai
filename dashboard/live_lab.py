@@ -26,7 +26,6 @@ from live import (
     flow_signature,
     mechanism_kind,
     nginx_directives,
-    role_for_ip,
 )
 from mechanism import (
     CONN_LIMIT,
@@ -36,7 +35,6 @@ from mechanism import (
     apply_profile_guard,
 )
 from m1_capture.features import WindowTracker, build_features
-from m1_capture.merge import GT_ROLE
 from m1_capture.sensor import parse_http
 from m2_triggers.stall import STALL_THRESHOLD_S, detect as detect_stall
 from schemas import FlowRecord
@@ -264,8 +262,9 @@ def main() -> int:
                 http = parse_http(bytes.fromhex(rec["fwd_payload"]))
                 feats = build_features(rec, http, win, fs.client_ip, now)
                 res = engine.score(feats, fs.client_ip)
-                truth = (GT_ROLE.get(http.get("ground_truth"))
-                         or role_for_ip(fs.client_ip) or "unknown")
+                # Labels live in the side log (off the wire); the live sensor
+                # has no side log, so truth is unavailable here.
+                truth = "unlabelled"
 
                 model_score = float(res["calibrated"])
                 score = model_score

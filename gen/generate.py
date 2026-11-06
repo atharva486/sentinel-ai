@@ -2,6 +2,7 @@
 from __future__ import annotations
 import argparse
 import asyncio
+import json
 import random
 import time
 
@@ -16,15 +17,24 @@ async def _connect(src_ip: str | None = None):
             LAB_HOST, LAB_PORT, local_addr=(src_ip, 0))
     return await asyncio.open_connection(LAB_HOST, LAB_PORT)
 
-# Builds the ground-truth header embedded in every request for per-flow labelling.
-def _gt_header(gt_label: str) -> bytes:
-    return f"X-Ground-Truth: {gt_label}\r\n".encode()
+# Side-log row written once per connection so labels can be joined off the wire.
+# Columns: src_ip, src_port, start_ts, end_ts, role, attack_type, tool, parameters.
+def _side_log(path: str | None, row: dict) -> None:
+    if not path:
+        return
+    line = json.dumps(row, separators=(",", ":")) + "\n"
+    # asyncio is single-threaded; open+write has no await inside, so concurrent
+    # worker coroutines cannot interleave within this block.
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(line)
+
 
 # Simulates a realistic browser session with reconnects and slow but finite uploads.
 async def benign_worker(agent: int, duration: int, think_lo: float,
                         think_hi: float, slow_fraction: float = 0.15,
                         stagger: float = 0.0, src_ip: str | None = None,
-                        stats: dict | None = None):
+                        stats: dict | None = None,
+                        side_log: str | None = None):
     if stats is None:
         stats = {"connections_attempted": 0, "connections_succeeded": 0,
                  "connections_failed": 0, "requests_attempted": 0,
@@ -35,7 +45,7 @@ async def benign_worker(agent: int, duration: int, think_lo: float,
         await asyncio.sleep(random.uniform(0.0, stagger))
     end = time.time() + duration
     uid = f"u{agent}"
-    gt_header = _gt_header("benign")
+    start_ts = time.time()
 
     while time.time() < end:
         stats["connections_attempted"] = stats.get("connections_attempted", 0) + 1
@@ -47,18 +57,19 @@ async def benign_worker(agent: int, duration: int, think_lo: float,
             stats["exceptions"].append(f"agent={agent} connect: {type(e).__name__}: {e}")
             await asyncio.sleep(1.0)
             continue
+        sock = writer.get_extra_info("sockname")
+        src_port = sock[1] if sock else None
         for _ in range(random.randint(1, 3)):
             if time.time() >= end:
                 break
             slow = random.random() < slow_fraction
             body_len = (random.randint(200_000, 2_000_000) if slow
                         else random.randint(0, 4000))
-            head = (f"POST /api/form/{uid} HTTP/1.1\r\n"
+            head = (f"POST /api/txn HTTP/1.1\r\n"
                     f"Host: api\r\n"
-                    f"User-Agent: Mozilla/5.0 ({uid})\r\n"
+                    f"User-Agent: Mozilla/5.0\r\n"
                     f"Content-Length: {body_len}\r\n"
                     f"Content-Type: multipart/form-data\r\n").encode()
-            head += gt_header + b"\r\n"
             stats["requests_attempted"] = stats.get("requests_attempted", 0) + 1
             try:
                 if slow:
@@ -96,6 +107,18 @@ async def benign_worker(agent: int, duration: int, think_lo: float,
                 stats["exceptions"].append(f"agent={agent} request: {type(e).__name__}: {e}")
                 break
             await asyncio.sleep(random.uniform(think_lo, think_hi))
+        _side_log(side_log, {
+            "src_ip": src_ip,
+            "src_port": src_port,
+            "start_ts": start_ts,
+            "end_ts": time.time(),
+            "role": "benign",
+            "attack_type": "benign",
+            "tool": "generate.py",
+            "parameters": {"duration": duration, "think_lo": think_lo,
+                           "think_hi": think_hi, "slow_fraction": slow_fraction,
+                           "stagger": stagger},
+        })
         writer.close()
         try:
             await writer.wait_closed()
@@ -107,17 +130,19 @@ async def benign_worker(agent: int, duration: int, think_lo: float,
 # Simulates a Slowloris attack that never terminates its HTTP header.
 async def slowloris_worker(conn_id: int, duration: int,
                            keepalive_interval: float = 1.0,
-                           stagger: float = 0.0, src_ip: str | None = None):
+                           stagger: float = 0.0, src_ip: str | None = None,
+                           side_log: str | None = None):
     if stagger > 0:
         await asyncio.sleep(random.uniform(0.0, stagger))
     end = time.time() + duration
     if time.time() >= end:
         return
     reader, writer = await _connect(src_ip)
-    gt_header = _gt_header("slow")
-    writer.write(f"GET /api/search?q={'y' * 70}&u={conn_id} HTTP/1.1\r\n"
-                 f"Host: api\r\nUser-Agent: curl/7.81.0\r\n".encode())
-    writer.write(gt_header)
+    sock = writer.get_extra_info("sockname")
+    src_port = sock[1] if sock else None
+    start_ts = time.time()
+    writer.write(f"GET /api/txn?q={'y' * 70}&u={conn_id} HTTP/1.1\r\n"
+                 f"Host: api\r\nUser-Agent: Mozilla/5.0\r\n".encode())
     await writer.drain()
 
     while time.time() < end:
@@ -125,26 +150,39 @@ async def slowloris_worker(conn_id: int, duration: int,
         await writer.drain()
         await asyncio.sleep(random.uniform(keepalive_interval * 0.5,
                                            keepalive_interval * 1.5))
+    _side_log(side_log, {
+        "src_ip": src_ip,
+        "src_port": src_port,
+        "start_ts": start_ts,
+        "end_ts": time.time(),
+        "role": "attack",
+        "attack_type": "slowloris",
+        "tool": "generate.py",
+        "parameters": {"duration": duration, "keepalive_interval": keepalive_interval,
+                       "stagger": stagger},
+    })
     writer.close()
 
 
 # Simulates a high-rate HTTP flood using keep-alive connections.
 async def flood_worker(conn_id: int, duration: int, req_per_conn: int = 200,
-                       stagger: float = 0.0, src_ip: str | None = None):
+                       stagger: float = 0.0, src_ip: str | None = None,
+                       side_log: str | None = None):
     if stagger > 0:
         await asyncio.sleep(random.uniform(0.0, stagger))
     end = time.time() + duration
     if time.time() >= end:
         return
     reader, writer = await _connect(src_ip)
-    gt_header = _gt_header("flood")
+    sock = writer.get_extra_info("sockname")
+    src_port = sock[1] if sock else None
+    start_ts = time.time()
 
     while time.time() < end:
         for _ in range(req_per_conn):
-            req = (b"GET /api/items HTTP/1.1\r\nHost: api\r\n"
+            req = (b"GET /api/txn HTTP/1.1\r\nHost: api\r\n"
                    b"Connection: keep-alive\r\n"
-                   b"User-Agent: Mozilla/5.0\r\n")
-            req += gt_header + b"\r\n"
+                   b"User-Agent: Mozilla/5.0\r\n\r\n")
             writer.write(req)
         await writer.drain()
         try:
@@ -152,6 +190,17 @@ async def flood_worker(conn_id: int, duration: int, req_per_conn: int = 200,
         except asyncio.TimeoutError:
             pass
         await asyncio.sleep(random.uniform(0.03, 0.06))
+    _side_log(side_log, {
+        "src_ip": src_ip,
+        "src_port": src_port,
+        "start_ts": start_ts,
+        "end_ts": time.time(),
+        "role": "attack",
+        "attack_type": "flood",
+        "tool": "generate.py",
+        "parameters": {"duration": duration, "req_per_conn": req_per_conn,
+                       "stagger": stagger},
+    })
     writer.close()
 
 # Picks this worker's source IP from the container's pool.
@@ -163,26 +212,28 @@ def _ip_for(i: int) -> str | None:
 # Runs benign, slowloris, and flood workers from this container.
 async def run_mix(duration: int, n_benign: int, n_slow: int, n_flood: int,
                   label: str, stagger: float | None = None,
-                  req_per_conn: int = 200):
+                  req_per_conn: int = 200, side_log: str | None = None):
     if stagger is None:
         stagger = duration * 0.6
     tasks = []
     for i in range(n_benign):
         tasks.append(benign_worker(i, duration, 0.2, 2.0, stagger=stagger,
-                                   src_ip=_ip_for(i)))
+                                   src_ip=_ip_for(i), side_log=side_log))
     for i in range(n_slow):
         tasks.append(slowloris_worker(i, duration, stagger=stagger,
-                                      src_ip=_ip_for(i)))
+                                      src_ip=_ip_for(i), side_log=side_log))
     for i in range(n_flood):
         tasks.append(flood_worker(i, duration, req_per_conn=req_per_conn,
-                                  stagger=stagger, src_ip=_ip_for(i)))
+                                  stagger=stagger, src_ip=_ip_for(i),
+                                  side_log=side_log))
     print(f"[{label}] {n_benign} benign + {n_slow} slowloris + "
           f"{n_flood} flood, for {duration}s")
     await asyncio.gather(*tasks, return_exceptions=True)
 
 # Runs a benign-only traffic generation to measure false-positive rate.
 async def run_benign_only(duration: int, n_benign: int, label: str,
-                          stagger: float | None = None):
+                          stagger: float | None = None,
+                          side_log: str | None = None):
     if stagger is None:
         stagger = duration * 0.6
     stats_list = [{"connections_attempted": 0, "connections_succeeded": 0,
@@ -190,7 +241,8 @@ async def run_benign_only(duration: int, n_benign: int, label: str,
                    "requests_completed": 0, "requests_failed": 0,
                    "exceptions": []} for _ in range(n_benign)]
     tasks = [benign_worker(i, duration, 0.2, 2.0, stagger=stagger,
-                           src_ip=_ip_for(i), stats=stats_list[i])
+                           src_ip=_ip_for(i), stats=stats_list[i],
+                           side_log=side_log)
              for i in range(n_benign)]
     print(f"[{label}] benign only: {n_benign} agents, {duration}s "
           f"(this run gives the FPR)")
@@ -243,50 +295,76 @@ async def _after(delay: float, coro):
 
 # Runs one source IP through a real-world attack profile.
 async def mixed_ip_worker(i: int, profile: str, duration: int,
-                          req_per_conn: int = 50, src_ip: str | None = None):
+                          req_per_conn: int = 50, src_ip: str | None = None,
+                          side_log: str | None = None):
     half = max(1, duration // 2)
     span = duration + 15
     hspan = half + 15
 
     def ben(dur, stagger):
         return _bounded(benign_worker(i, dur, 0.2, 2.0, stagger=stagger,
-                                      src_ip=src_ip), dur + 15)
+                                      src_ip=src_ip, side_log=side_log), dur + 15)
 
     if profile == "benign_only":
         await ben(duration, duration * 0.6)
     elif profile == "slow_only":
-        await _bounded(slowloris_worker(i, duration, stagger=duration * 0.6, src_ip=src_ip), span)
+        await _bounded(slowloris_worker(i, duration, stagger=duration * 0.6,
+                                        src_ip=src_ip, side_log=side_log), span)
     elif profile == "flood_only":
-        await _bounded(flood_worker(i, duration, req_per_conn=req_per_conn, stagger=duration * 0.6, src_ip=src_ip), span)
+        await _bounded(flood_worker(i, duration, req_per_conn=req_per_conn,
+                                    stagger=duration * 0.6, src_ip=src_ip,
+                                    side_log=side_log), span)
     elif profile == "benign_then_slow":
         await asyncio.gather(ben(half, 0.0),
-                             _after(half, _bounded(slowloris_worker(i, half, src_ip=src_ip), hspan)))
+                             _after(half, _bounded(slowloris_worker(i, half,
+                                                             src_ip=src_ip,
+                                                             side_log=side_log),
+                                                 hspan)))
     elif profile == "benign_then_flood":
         await asyncio.gather(ben(half, 0.0),
-                             _after(half, _bounded(flood_worker(i, half, req_per_conn=req_per_conn, src_ip=src_ip), hspan)))
+                             _after(half, _bounded(flood_worker(i, half,
+                                                                req_per_conn=req_per_conn,
+                                                                src_ip=src_ip,
+                                                                side_log=side_log),
+                                                     hspan)))
     elif profile == "slow_then_benign":
-        await asyncio.gather(_bounded(slowloris_worker(i, half, src_ip=src_ip), hspan),
+        await asyncio.gather(_bounded(slowloris_worker(i, half, src_ip=src_ip,
+                                                       side_log=side_log), hspan),
                              _after(half, ben(half, 0.0)))
     elif profile == "flood_then_benign":
-        await asyncio.gather(_bounded(flood_worker(i, half, req_per_conn=req_per_conn, src_ip=src_ip), hspan),
+        await asyncio.gather(_bounded(flood_worker(i, half, req_per_conn=req_per_conn,
+                                                   src_ip=src_ip, side_log=side_log),
+                                      hspan),
                              _after(half, ben(half, 0.0)))
     elif profile == "benign_concurrent_slow":
         await asyncio.gather(ben(duration, duration * 0.6),
-                             _bounded(slowloris_worker(i, duration, stagger=duration * 0.6, src_ip=src_ip), span))
+                             _bounded(slowloris_worker(i, duration,
+                                                       stagger=duration * 0.6,
+                                                       src_ip=src_ip,
+                                                       side_log=side_log), span))
     elif profile == "slow_and_flood":
-        await asyncio.gather(_bounded(slowloris_worker(i, duration, stagger=duration * 0.6, src_ip=src_ip), span),
-                             _bounded(flood_worker(i, duration, req_per_conn=req_per_conn, stagger=duration * 0.6, src_ip=src_ip), span))
+        await asyncio.gather(_bounded(slowloris_worker(i, duration,
+                                                       stagger=duration * 0.6,
+                                                       src_ip=src_ip,
+                                                       side_log=side_log), span),
+                             _bounded(flood_worker(i, duration,
+                                                   req_per_conn=req_per_conn,
+                                                   stagger=duration * 0.6,
+                                                   src_ip=src_ip,
+                                                   side_log=side_log), span))
     else:
         raise ValueError(f"unknown mixed profile: {profile}")
 
 
 # Runs N source IPs through mixed profiles in round-robin order.
-async def run_mixed(duration: int, n_ips: int, label: str, req_per_conn: int = 50):
+async def run_mixed(duration: int, n_ips: int, label: str, req_per_conn: int = 50,
+                    side_log: str | None = None):
     tasks = [mixed_ip_worker(i, MIXED_PROFILES[i % len(MIXED_PROFILES)],
-                             duration, req_per_conn=req_per_conn, src_ip=_ip_for(i))
+                             duration, req_per_conn=req_per_conn,
+                             src_ip=_ip_for(i), side_log=side_log)
              for i in range(n_ips)]
     print(f"[{label}] mixed: {n_ips} IPs over {len(MIXED_PROFILES)} profiles, "
-          f"{duration}s (per-flow labels via X-Ground-Truth)")
+          f"{duration}s (per-flow labels via side log)")
     await asyncio.gather(*tasks, return_exceptions=True)
 
 # Parses CLI args and dispatches to the selected traffic generation mode.
@@ -306,6 +384,8 @@ def main() -> None:
                     help="mixed mode: N source IPs, each playing a real-world "
                          "benign/attack/switch profile (per-flow labels)")
     ap.add_argument("--label", default="run")
+    ap.add_argument("--side-log", default=None,
+                    help="path to per-connection side-log JSONL (labels off the wire)")
     ap.add_argument("--ip-base", default=None,
                     help="e.g. 172.18.16) bind worker i to <base>.<i+1>")
     ap.add_argument("--ip-count", type=int, default=0,
@@ -318,18 +398,22 @@ def main() -> None:
         print(f"source IP pool: {SRC_IPS[0]} .. {SRC_IPS[-1]} "
               f"({len(SRC_IPS)} IPs)")
     if args.mode == "benign":
-        asyncio.run(run_benign_only(args.duration, args.benign, args.label))
+        asyncio.run(run_benign_only(args.duration, args.benign, args.label,
+                                    side_log=args.side_log))
     elif args.mode == "slow":
-        asyncio.run(run_mix(args.duration, 0, args.slow, 0, args.label))
+        asyncio.run(run_mix(args.duration, 0, args.slow, 0, args.label,
+                            side_log=args.side_log))
     elif args.mode == "flood":
         asyncio.run(run_mix(args.duration, 0, 0, 0, args.flood, args.label,
-                            req_per_conn=args.req_per_conn))
+                            req_per_conn=args.req_per_conn,
+                            side_log=args.side_log))
     elif args.mode == "mixed":
         asyncio.run(run_mixed(args.duration, args.mixed, args.label,
-                              req_per_conn=args.req_per_conn))
+                              req_per_conn=args.req_per_conn,
+                              side_log=args.side_log))
     else:
         asyncio.run(run_mix(args.duration, 0, args.slow, args.flood,
-                            args.label))
+                            args.label, side_log=args.side_log))
 
 if __name__ == "__main__":
     main()
