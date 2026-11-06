@@ -47,6 +47,11 @@ AS_OF_SECONDS = [1.0, 2.0, 3.0, 5.0, 10.0, 20.0]
 PAYLOAD_CAP = 65536
 
 
+def pcap_to_session(pcap_path: Path) -> str:
+    """Derive a session name from a pcap filename, e.g. runH.pcap -> 'runh'."""
+    return pcap_path.stem.lower()
+
+
 def find_matching_side_log(pcap_path: Path) -> Path | None:
     """Find the side_log whose time range overlaps with the pcap.
 
@@ -159,7 +164,7 @@ def _norm_key(src, sport, dst, dport):
     return (a, b) if a <= b else (b, a)
 
 
-def replay_pcap(pcap_path, side_idx, is_baseline):
+def replay_pcap(pcap_path, side_idx, is_baseline, pcap_session=None):
     """Replay one pcap, returning snapshot rows for all flows.
 
     Single pass: record per-flow packet events, determine client/server from
@@ -306,6 +311,7 @@ def replay_pcap(pcap_path, side_idx, is_baseline):
 
             rows.append({
                 "flow_id": conn_state["flow_id"],
+                "session": pcap_session,
                 "as_of": str(as_of),
                 "as_of_seconds": float(as_of) if as_of != "final" else flow_age,
                 "entity": c_ip,
@@ -330,6 +336,7 @@ def main():
 
     for pcap in pcaps:
         is_baseline = pcap.name == "live_capture.pcap"
+        pcap_session = pcap_to_session(pcap)
         side_log_path = find_matching_side_log(pcap) if is_baseline else None
         side_idx = None
         if side_log_path:
@@ -338,8 +345,9 @@ def main():
             print(f"  Side log: {side_log_path} ({len(side_rows)} rows)")
         else:
             print(f"  Side log: NOT available (legacy labels)")
-        print(f"Replaying {pcap.name} (baseline={is_baseline}, side_log={side_idx is not None}) ...")
-        rows = replay_pcap(pcap, side_idx, is_baseline)
+        print(f"Replaying {pcap.name} (session={pcap_session}, baseline={is_baseline}, "
+              f"side_log={side_idx is not None}) ...")
+        rows = replay_pcap(pcap, side_idx, is_baseline, pcap_session)
         print(f"  {len(rows):,} snapshot rows")
         all_rows.extend(rows)
 
