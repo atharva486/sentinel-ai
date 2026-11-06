@@ -34,7 +34,7 @@ from mechanism import (
     Mechanism,
     apply_profile_guard,
 )
-from m1_capture.features import WindowTracker, build_features
+from m1_capture.features import WindowTracker, features_http, ip_context
 from m1_capture.merge import load_side_log, _side_log_index, _match_side_log
 from m1_capture.sensor import parse_http
 from m2_triggers.stall import STALL_THRESHOLD_S, detect as detect_stall
@@ -288,7 +288,24 @@ def main() -> int:
 
                 rec = fs.to_record()
                 http = parse_http(bytes.fromhex(rec["fwd_payload"]))
-                feats = build_features(rec, http, win, fs.client_ip, now)
+
+                # Base per-connection features (decision-time, no IP context).
+                conn_state = {
+                    "t_first": fs.t_first, "t_last": now,
+                    "t_close": fs.t_close,
+                    "fwd_bytes": fs.fwd_bytes, "bwd_bytes": fs.bwd_bytes,
+                    "fwd_pkts": fs.fwd_pkts, "bwd_pkts": fs.bwd_pkts,
+                    "fwd_times": list(fs.fwd_times),
+                    "n_requests_seen": fs.n_requests_seen,
+                    "client_ip": fs.client_ip,
+                    "flow_id": fs.flow_id,
+                }
+                base_feats = features_http(conn_state, http, now)
+                # IP-level context (escalation only, Phase 5).  Merged into
+                # feats so the legacy 16-feature model can score.
+                ctx_feats = ip_context(conn_state, now, fs.client_ip, win)
+                feats = {**base_feats, **ctx_feats}
+
                 res = engine.score(feats, fs.client_ip)
 
                 # Join to side log on (client_ip, client_port, time overlap).
