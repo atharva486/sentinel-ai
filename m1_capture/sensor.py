@@ -234,7 +234,14 @@ def _unwrap(buf: bytes, linktype: int):
 
     return ip if isinstance(ip, dpkt.ip.IP) else None
 
-def read_pcap(path: Path, flush_after: float) -> list[dict]:
+def read_pcap(path: Path, flush_after: float,
+              as_of_seconds: float | None = None) -> list[dict]:
+    """Read a pcap and return flow records.
+
+    If ``as_of_seconds`` is given, only packets with ts <= as_of_seconds are
+    ingested, so the returned flows reflect connection state at that decision
+    time (not the full flow lifetime).
+    """
     tracker = FlowTracker(flush_after_s=flush_after)
     records: list[dict] = []
     last_ts = 0.0
@@ -248,6 +255,8 @@ def read_pcap(path: Path, flush_after: float) -> list[dict]:
         linktype = reader.datalink()
 
         for ts, buf in reader:
+            if as_of_seconds is not None and ts > as_of_seconds:
+                break
             last_ts = ts
             ip = _unwrap(buf, linktype)
             if ip is None:
@@ -262,7 +271,8 @@ def read_pcap(path: Path, flush_after: float) -> list[dict]:
             tracker.ingest(ts, src, tcp.sport, dst, tcp.dport,
                            bytes(tcp.data), tcp.flags)
 
-        for fs in tracker.flush(last_ts + flush_after + 1.0):
+        now = as_of_seconds if as_of_seconds is not None else last_ts
+        for fs in tracker.flush(now + flush_after + 1.0):
             fs.finalized = False
             records.append(fs.to_record())
 

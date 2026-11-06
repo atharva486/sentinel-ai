@@ -1,6 +1,8 @@
 from m1_capture.features import (  # noqa: F401
-    RATE_FEATURES, CONCURRENCY_FEATURES, STALL_FEATURES,
-    SLOW_GROUP, FAST_GROUP, FEATURE_ORDER, EXCLUDED,
-    flow_features, open_flow_features, build_features, group_of,
-    WindowTracker, vectorise,
+    BASE_FEATURES, IPCONTEXT_FEATURES, LEGACY_FEATURE_ORDER,
+    FEATURE_ORDER, EXCLUDED,
+    SLOW_GROUP, RATE_GROUP,
+    features, features_http, ip_context, legacy_features,
+    WindowTracker, vectorise, group_of,
+    flow_features, open_flow_features, build_features,
 )
