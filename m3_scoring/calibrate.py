@@ -108,11 +108,17 @@ class CalibrationResult:
                 f"Artifact 'feature_order' must contain only strings; got {feature_order}"
             )
 
-        from features import FEATURE_ORDER
-        if feature_order != FEATURE_ORDER:
-            raise ValueError(
-                f"Artifact 'feature_order' must match FEATURE_ORDER exactly. "
-                f"Got: {feature_order}\nExpected: {FEATURE_ORDER}"
+        # Warn (do not fail) if the artifact's feature_order differs from the
+        # current module FEATURE_ORDER.  Old model artifacts were trained on
+        # the pre-Phase-2 16-feature order; new code uses the 15-feature base
+        # order.  The artifact's order takes precedence for scoring.
+        from features import FEATURE_ORDER as _current_fe
+        if feature_order != _current_fe:
+            import warnings
+            warnings.warn(
+                f"Artifact feature_order differs from current FEATURE_ORDER. "
+                f"Using artifact order: {feature_order}",
+                stacklevel=2,
             )
 
         import xgboost as xgb

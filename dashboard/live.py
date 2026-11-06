@@ -23,7 +23,6 @@ import dpkt
 
 from m1_capture import sensor
 from m1_capture.features import (
-    FEATURE_ORDER,
     WindowTracker,
     build_features,
 )
@@ -57,27 +56,27 @@ class LiveEngine:
             except Exception:
                 self._explainer = False
         if self._explainer is False:
-            return {name: 0.0 for name in FEATURE_ORDER}
+            return {name: 0.0 for name in self.art.feature_order}
         row = np.array(
-            [[float(feats.get(k, 0.0)) for k in FEATURE_ORDER]], dtype=np.float64
+            [[float(feats.get(k, 0.0)) for k in self.art.feature_order]], dtype=np.float64
         )
         try:
             sv = self._explainer.shap_values(row)
         except Exception:
-            return {name: 0.0 for name in FEATURE_ORDER}
+            return {name: 0.0 for name in self.art.feature_order}
         if isinstance(sv, list):
             values = sv[1] if len(sv) == 2 and isinstance(sv[1], np.ndarray) else sv[0]
         else:
             values = sv[0] if getattr(sv, "ndim", 1) == 2 else sv
         values = np.asarray(values, dtype=float).ravel()
-        if values.size < len(FEATURE_ORDER):
-            values = np.pad(values, (0, len(FEATURE_ORDER) - values.size))
-        values = values[: len(FEATURE_ORDER)]
-        return {name: float(values[i]) for i, name in enumerate(FEATURE_ORDER)}
+        if values.size < len(self.art.feature_order):
+            values = np.pad(values, (0, len(self.art.feature_order) - values.size))
+        values = values[: len(self.art.feature_order)]
+        return {name: float(values[i]) for i, name in enumerate(self.art.feature_order)}
 
     def score(self, feats: dict, entity: str = "flow") -> dict:
         X = np.array(
-            [[float(feats.get(k, 0.0)) for k in FEATURE_ORDER]], dtype=np.float64
+            [[float(feats.get(k, 0.0)) for k in self.art.feature_order]], dtype=np.float64
         )
         raw = float(self.art.model.predict_proba(X)[0, 1])
         cal = float(self.art.calibrated_score(feats))
@@ -101,7 +100,7 @@ class LiveEngine:
             return []
         X = np.array(
             [
-                [float(r["feats"].get(k, 0.0)) for k in FEATURE_ORDER]
+                [float(r["feats"].get(k, 0.0)) for k in self.art.feature_order]
                 for r in rows
             ],
             dtype=np.float64,
@@ -114,12 +113,12 @@ class LiveEngine:
             except Exception:
                 self._explainer = False
         if self._explainer is False:
-            values = np.zeros((len(rows), len(FEATURE_ORDER)))
+            values = np.zeros((len(rows), len(self.art.feature_order)))
         else:
             try:
                 sv = self._explainer.shap_values(X)
             except Exception:
-                values = np.zeros((len(rows), len(FEATURE_ORDER)))
+                values = np.zeros((len(rows), len(self.art.feature_order)))
             if isinstance(sv, list):
                 values = sv[1] if len(sv) == 2 and isinstance(sv[1], np.ndarray) else sv[0]
             else:
@@ -127,13 +126,13 @@ class LiveEngine:
             values = np.asarray(values, dtype=float)
             if values.ndim == 1:
                 values = values.reshape(1, -1)
-            values = values[:, : len(FEATURE_ORDER)]
+            values = values[:, : len(self.art.feature_order)]
 
         policy = Policy()
         out: list[dict] = []
         for i, row in enumerate(rows):
             shap_values = {
-                name: float(values[i, j]) for j, name in enumerate(FEATURE_ORDER)
+                name: float(values[i, j]) for j, name in enumerate(self.art.feature_order)
             }
             groups = shap_group_scores(shap_values)
             score_i = float(cal[i])
