@@ -24,7 +24,6 @@ import dpkt
 from m1_capture import sensor
 from m1_capture.features import (
     WindowTracker,
-    build_features,
 )
 from m3_scoring.calibrate import CalibrationResult
 from mechanism import (
