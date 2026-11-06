@@ -35,6 +35,7 @@ from mechanism import (
     apply_profile_guard,
 )
 from m1_capture.features import WindowTracker, build_features
+from m1_capture.merge import load_side_log, _side_log_index, _match_side_log
 from m1_capture.sensor import parse_http
 from m2_triggers.stall import STALL_THRESHOLD_S, detect as detect_stall
 from schemas import FlowRecord
@@ -161,6 +162,23 @@ def main() -> int:
                  decisions=0, flows_seen=0, counters={}, limits={"rate": False,
                  "conn": False})
 
+    # Fresh run id and side-log path (off-the-wire labels, Phase 1).
+    # Mounted volume ./reports/runs -> /reports/runs in generator containers.
+    run_id = f"run_{int(time.time())}"
+    run_dir = REPO_ROOT / "reports" / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    side_log_container = f"/reports/runs/{run_id}/side_log.jsonl"
+    side_log_host = run_dir / "side_log.jsonl"
+    side_log_host.write_text("")
+    side_log_arg = ["--side-log", side_log_container]
+
+    # Flow metadata + all decisions for post-run side-log join.
+    flow_meta: dict[str, tuple[str, int, float, float]] = {}
+    all_decisions: list[dict] = []
+    side_idx: dict = {}
+    matched_count = 0
+    decision_count = 0
+
     if not args.no_up:
         print("bringing the lab up ...")
         r = runner.up()
@@ -190,17 +208,17 @@ def main() -> int:
     if args.mode in ("benign", "mixed") or args.also_benign:
         runner.launch("legit-loadgen", "benign", dur, label="livelab",
                       ip_base="172.18.15", ip_count=args.benign_count,
-                      extra=["--benign", str(args.benign_count)])
+                      extra=["--benign", str(args.benign_count)] + side_log_arg)
     if args.mode in ("slow", "mixed"):
         runner.launch("slow-gen", "slow", dur,
                       label="livelab", ip_base="172.18.16", ip_count=args.ip_count,
-                      extra=["--slow", str(args.ip_count)])
+                      extra=["--slow", str(args.ip_count)] + side_log_arg)
     if args.mode in ("flood", "mixed"):
         n_flood = args.ip_count * max(1, args.conns_per_ip)
         runner.launch("flood-gen", "flood", dur,
                       label="livelab", ip_base="172.18.17", ip_count=args.ip_count,
                       extra=["--flood", str(n_flood),
-                             "--req-per-conn", str(args.req_per_conn)])
+                             "--req-per-conn", str(args.req_per_conn)] + side_log_arg)
     print(f"traffic launched (mode={args.mode}, generators running {dur}s)")
 
     sensor = LiveSensor(cap_path)
@@ -237,6 +255,13 @@ def main() -> int:
             flows = sensor.poll()
             now = sensor.latest_ts or time.time()
 
+            # Refresh side-log index from the mounted volume each iteration.
+            try:
+                side_rows = load_side_log(side_log_host)
+                side_idx = _side_log_index(side_rows)
+            except Exception:
+                side_idx = {}
+
             win = WindowTracker(10.0)
             for fs in flows:
                 if fs.t_first <= 0:
@@ -250,6 +275,9 @@ def main() -> int:
                     continue
                 age = ((fs.t_close - fs.t_first) if fs.t_close is not None
                        else max(0.0, now - fs.t_first))
+                t_end = fs.t_close if fs.t_close is not None else fs.t_last
+                flow_meta[str(fs.flow_id)] = (fs.client_ip, fs.client_port,
+                                              fs.t_first, t_end)
                 bucket = int(min(age, 600) // 15)
                 key = (fs.flow_id, "final" if fs.t_close is not None else bucket)
                 if key in emitted:
@@ -262,9 +290,18 @@ def main() -> int:
                 http = parse_http(bytes.fromhex(rec["fwd_payload"]))
                 feats = build_features(rec, http, win, fs.client_ip, now)
                 res = engine.score(feats, fs.client_ip)
-                # Labels live in the side log (off the wire); the live sensor
-                # has no side log, so truth is unavailable here.
-                truth = "unlabelled"
+
+                # Join to side log on (client_ip, client_port, time overlap).
+                # Unmatched = "unmatched", never guessed.
+                truth = "unmatched"
+                attack_type = "unmatched"
+                cip, cport, t0, t1 = flow_meta[str(fs.flow_id)]
+                row = _match_side_log(side_idx, cip, cport, t0, t1)
+                if row is not None:
+                    truth = row.get("role", "unmatched")
+                    attack_type = row.get("attack_type", "unmatched")
+                    matched_count += 1
+                decision_count += 1
 
                 model_score = float(res["calibrated"])
                 score = model_score
@@ -284,9 +321,13 @@ def main() -> int:
                     "ts": time.time(),
                     "flow": str(fs.flow_id),
                     "entity": fs.client_ip,
+                    "client_port": fs.client_port,
+                    "t_first": fs.t_first,
+                    "t_end": t_end,
                     "age": round(age, 1),
                     "profile": flow_signature(feats),
                     "truth": truth,
+                    "attack_type": attack_type,
                     "model_score": round(model_score, 4),
                     "score": round(score, 4),
                     "raw": round(res["raw"], 4),
@@ -299,6 +340,7 @@ def main() -> int:
                     "directive": nginx_directives(res["mechanism"]),
                 }
                 append_feed(rec_out)
+                all_decisions.append(rec_out)
                 if fs.flow_id not in counted_flows:
                     counted_flows.add(fs.flow_id)
                     decisions += 1
@@ -346,6 +388,10 @@ def main() -> int:
     finally:
         runner.stop_capture()
         if not args.keep_traffic:
+            # Generators were started with dur = duration + 5s; let them finish
+            # writing side-log rows before we kill them. Benign connections can
+            # take up to the response-read timeout, so wait generously.
+            time.sleep(15.0)
             runner.stop_traffic()
         try:
             if limits["rate"] or limits["conn"]:
@@ -354,9 +400,117 @@ def main() -> int:
                 limits = {"rate": False, "conn": False}
         except Exception:
             pass
+
+        # --- Post-run: join every decision to the complete side log -------
+        match_rate = 0.0
+        try:
+            # Give generator containers a moment to flush the side log.
+            time.sleep(1.0)
+            side_rows = load_side_log(side_log_host)
+            side_idx_final = _side_log_index(side_rows)
+
+            n_rows = len(side_rows)
+            role_counts: dict[str, int] = {}
+            atype_counts: dict[str, int] = {}
+            for r in side_rows:
+                role_counts[r.get("role", "?")] = role_counts.get(r.get("role", "?"), 0) + 1
+                atype_counts[r.get("attack_type", "?")] = atype_counts.get(r.get("attack_type", "?"), 0) + 1
+
+            print("\n=== Side log (off-the-wire labels) ===")
+            print(f"path: {side_log_host}")
+            print(f"rows: {n_rows}")
+            print(f"role counts: {dict(sorted(role_counts.items()))}")
+            print(f"attack_type counts: {dict(sorted(atype_counts.items()))}")
+            print("first 5 rows:")
+            for r in side_rows[:5]:
+                print("  ", json.dumps(r, separators=(",", ":")))
+
+            # Re-match ALL decisions against the complete side log.
+            final_truth: dict[str, tuple[str, str]] = {}  # flow_id -> (truth, attack_type)
+            for d in all_decisions:
+                fid = d["flow"]
+                cip = d["entity"]
+                cport = d.get("client_port", 0)
+                t0 = d.get("t_first", 0.0)
+                t1 = d.get("t_end", 0.0)
+                row = _match_side_log(side_idx_final, cip, cport, t0, t1)
+                if row is None:
+                    final_truth[fid] = ("unmatched", "unmatched")
+                else:
+                    final_truth[fid] = (row.get("role", "unmatched"),
+                                        row.get("attack_type", "unmatched"))
+
+            matched = sum(1 for t, _ in final_truth.values() if t != "unmatched")
+            total = len(final_truth)
+            match_rate = (100.0 * matched / total) if total else 0.0
+
+            # Rewrite the feed with final joined truth.
+            final_feed: list[dict] = []
+            for d in all_decisions:
+                fid = d["flow"]
+                t, at = final_truth.get(fid, ("unmatched", "unmatched"))
+                dd = dict(d)
+                dd["truth"] = t
+                dd["attack_type"] = at
+                final_feed.append(dd)
+            FEED_PATH.write_text("")
+            for dd in final_feed:
+                append_feed(dd)
+
+            # Final confusion matrix from joined truth only (exclude unmatched).
+            tp = fp = tn = fn = unmatched_n = 0
+            per_type: dict[str, dict[str, int]] = {}
+            for d in final_feed:
+                t, at = final_truth.get(d["flow"], ("unmatched", "unmatched"))
+                if t == "unmatched":
+                    unmatched_n += 1
+                    continue
+                pred = d["score"] >= COUNT_THRESHOLD
+                key = at
+                b = per_type.setdefault(key, {"tp": 0, "fp": 0, "tn": 0, "fn": 0, "total": 0})
+                b["total"] += 1
+                if t == "attack":
+                    b["tp" if pred else "fn"] += 1
+                    if pred:
+                        tp += 1
+                    else:
+                        fn += 1
+                else:
+                    b["fp" if pred else "tn"] += 1
+                    if pred:
+                        fp += 1
+                    else:
+                        tn += 1
+
+            print("\n=== Joined-truth evaluation (side log only) ===")
+            print(f"match rate: {match_rate:.1f}%  ({matched}/{total} decisions matched)")
+            print(f"TP={tp} FP={fp} TN={tn} FN={fn} unmatched={unmatched_n}")
+            if tp + fn:
+                print(f"attack recall: {tp / (tp + fn) * 100:.1f}%")
+            if fp + tn:
+                print(f"benign FPR: {fp / (fp + tn) * 100:.4f}%")
+            print("per attack_type:")
+            for at, b in sorted(per_type.items()):
+                rec = (b["tp"] / (b["tp"] + b["fn"]) * 100) if (b["tp"] + b["fn"]) else 0.0
+                fpr = (b["fp"] / (b["fp"] + b["tn"]) * 100) if (b["fp"] + b["tn"]) else 0.0
+                print(f"  {at}: total={b['total']} TP={b['tp']} FP={b['fp']} "
+                      f"TN={b['tn']} FN={b['fn']} recall={rec:.1f}% fpr={fpr:.4f}%")
+
+            # Update latest with final truth so the dashboard shows joined truth.
+            for fid, (t, at) in final_truth.items():
+                if fid in latest:
+                    _s, _f, _a = latest[fid][1], latest[fid][2], latest[fid][3]
+                    latest[fid] = (t, _s, _f, _a)
+
+        except Exception as e:
+            print(f"[post-run side-log join failed: {e}]")
+
         write_status(running=False, mode=args.mode, decisions=decisions,
-                     counters=confusion(), limits=limits, updated=time.time())
-    print(f"done: {decisions} decisions scored")
+                     counters=confusion(), limits=limits, updated=time.time(),
+                     side_log_path=str(side_log_host),
+                     side_log_match_rate=round(match_rate, 2))
+
+    print(f"done: {decisions} decisions scored  match_rate={match_rate:.1f}%")
     return 0
 
 if __name__ == "__main__":

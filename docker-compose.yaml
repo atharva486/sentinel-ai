@@ -36,6 +36,8 @@ services:
     build: ./gen
     container_name: legit_loadgen
     cap_add: ["NET_ADMIN"]   # allows per-worker source IPs (gen --ip-base)
+    volumes:
+      - ./reports/runs:/reports/runs
     networks:
       lab:
         ipv4_address: 172.18.0.5
@@ -44,6 +46,8 @@ services:
     build: ./gen
     container_name: slow_gen
     cap_add: ["NET_ADMIN"]
+    volumes:
+      - ./reports/runs:/reports/runs
     networks:
       lab:
         ipv4_address: 172.18.0.6
@@ -52,6 +56,8 @@ services:
     build: ./gen
     container_name: flood_gen
     cap_add: ["NET_ADMIN"]
+    volumes:
+      - ./reports/runs:/reports/runs
     networks:
       lab:
         ipv4_address: 172.18.0.7
