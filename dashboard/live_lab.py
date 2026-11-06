@@ -325,7 +325,7 @@ def main() -> int:
                     "t_first": fs.t_first,
                     "t_end": t_end,
                     "age": round(age, 1),
-                    "profile": flow_signature(feats),
+                    "display_guess": flow_signature(feats),
                     "truth": truth,
                     "attack_type": attack_type,
                     "model_score": round(model_score, 4),

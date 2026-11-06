@@ -52,11 +52,19 @@ class LiveEngine:
         import shap
 
         if self._explainer is None:
-            self._explainer = shap.TreeExplainer(self.art.model)
+            try:
+                self._explainer = shap.TreeExplainer(self.art.model)
+            except Exception:
+                self._explainer = False
+        if self._explainer is False:
+            return {name: 0.0 for name in FEATURE_ORDER}
         row = np.array(
             [[float(feats.get(k, 0.0)) for k in FEATURE_ORDER]], dtype=np.float64
         )
-        sv = self._explainer.shap_values(row)
+        try:
+            sv = self._explainer.shap_values(row)
+        except Exception:
+            return {name: 0.0 for name in FEATURE_ORDER}
         if isinstance(sv, list):
             values = sv[1] if len(sv) == 2 and isinstance(sv[1], np.ndarray) else sv[0]
         else:
@@ -101,16 +109,25 @@ class LiveEngine:
         raw = self.art.model.predict_proba(X)[:, 1]
         cal = np.clip(self.art.calibrator.predict(raw), 0.0, 1.0)
         if self._explainer is None:
-            self._explainer = shap.TreeExplainer(self.art.model)
-        sv = self._explainer.shap_values(X)
-        if isinstance(sv, list):
-            values = sv[1] if len(sv) == 2 and isinstance(sv[1], np.ndarray) else sv[0]
+            try:
+                self._explainer = shap.TreeExplainer(self.art.model)
+            except Exception:
+                self._explainer = False
+        if self._explainer is False:
+            values = np.zeros((len(rows), len(FEATURE_ORDER)))
         else:
-            values = sv
-        values = np.asarray(values, dtype=float)
-        if values.ndim == 1:
-            values = values.reshape(1, -1)
-        values = values[:, : len(FEATURE_ORDER)]
+            try:
+                sv = self._explainer.shap_values(X)
+            except Exception:
+                values = np.zeros((len(rows), len(FEATURE_ORDER)))
+            if isinstance(sv, list):
+                values = sv[1] if len(sv) == 2 and isinstance(sv[1], np.ndarray) else sv[0]
+            else:
+                values = sv
+            values = np.asarray(values, dtype=float)
+            if values.ndim == 1:
+                values = values.reshape(1, -1)
+            values = values[:, : len(FEATURE_ORDER)]
 
         policy = Policy()
         out: list[dict] = []
@@ -126,7 +143,7 @@ class LiveEngine:
             out.append(
                 {
                     "session": row["session"],
-                    "profile": row["profile"],
+                    "display_guess": row["display_guess"],
                     "truth": "attack" if y else "benign",
                     "y": y,
                     "entity": row["entity"],

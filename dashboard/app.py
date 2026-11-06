@@ -72,18 +72,19 @@ def get_artifact() -> CalibrationResult:
 def get_features() -> pd.DataFrame:
     return pd.read_parquet(DATA_PATH)
 
-# Returns raw and calibrated scores for held-out runs.
+# Returns raw and calibrated scores for the test split (sessions runb, runf, rung).
+# Named "get_test_scores" to avoid confusion with validation-time metrics.
 @st.cache_data
-def get_val_scores():
+def get_test_scores():
     df = get_features()
     art = get_artifact()
-    val = df[df["session"].isin(["runf", "rung"])].copy()
-    if val.empty:
-        return val, np.array([]), np.array([])
-    X = val[FEATURE_ORDER].to_numpy(dtype=float)
+    test = df[df["session"].isin(["runb", "runf", "rung"])].copy()
+    if test.empty:
+        return test, np.array([]), np.array([])
+    X = test[FEATURE_ORDER].to_numpy(dtype=float)
     raw = art.model.predict_proba(X)[:, 1]
     cal = np.clip(art.calibrator.predict(raw), 0.0, 1.0)
-    return val, raw, cal
+    return test, raw, cal
 
 # Maps a feature name to its defence group (stall, rate, or other).
 def feature_group(name: str) -> str:
@@ -265,7 +266,7 @@ with tab_results:
 
     from sklearn.metrics import average_precision_score, roc_auc_score
 
-    val, raw_v, cal_v = get_val_scores()
+    val, raw_v, cal_v = get_test_scores()
     y = val["y"].to_numpy()
 
     pr_c = average_precision_score(y, cal_v)
@@ -333,10 +334,11 @@ def get_monitor_order() -> list:
         rows.append(
             {
                 "session": str(r.session),
+                "flow_id": str(getattr(r, "flow_id", "")),
                 "y": int(r.y),
                 "entity": str(r.entity),
                 "feats": feats,
-                "profile": flow_signature(feats),
+                "display_guess": flow_signature(feats),
             }
         )
     return rows
@@ -414,7 +416,7 @@ def live_body(active: list, speed: int) -> None:
                  "quarantine": "🔴"}[cur["action"]]
         flag = "✅ correct" if (cur["truth"] == "attack") == (cur["score"] >= DETECT_THRESHOLD) else "⚠️ miss"
         st.markdown(
-            f"{badge} `{cur['entity']}` · signature **{cur['profile']}** · "
+            f"{badge} `{cur['entity']}` · signature **{cur['display_guess']}** · "
             f"truth **{cur['truth']}** · session `{cur['session']}` · {flag}  \n"
             f"**score {cur['score']:.3f}** (raw {cur['raw']:.3f}) → policy **{band}**"
         )
@@ -468,7 +470,7 @@ def live_body(active: list, speed: int) -> None:
             {
                 "#": base + i,
                 "session": h["session"],
-                "signature": h["profile"],
+                "signature": h["display_guess"],
                 "truth": h["truth"],
                 "score": round(h["score"], 3),
                 "group": h["group"],
@@ -552,32 +554,95 @@ def lab_body() -> None:
     st.markdown(pipeline_html(animate=running), unsafe_allow_html=True)
 
     if status:
-        ctr = status.get("counters", {})
         lim = status.get("limits", {})
-        # Compute ROC-AUC and PR-AUC from feed
-        y_true, y_score = [], []
+        # --- Per-flow metrics from the live feed ---
+        # Group decisions by flow_id; a flow is "flagged" if ANY of its
+        # snapshot decisions exceeded the threshold.  This is per-flow, not
+        # per-decision-row.
+        flow_best: dict[str, dict] = {}
         for entry in feed:
+            fid = entry.get("flow") or entry.get("flow_id")
+            if fid is None:
+                continue
             truth = entry.get("truth")
             score = entry.get("score")
-            if truth in ("attack", "benign") and score is not None:
-                y_true.append(1 if truth == "attack" else 0)
-                y_score.append(float(score))
-        roc_auc = roc_auc_score(y_true, y_score) if len(set(y_true)) == 2 else float("nan")
-        pr_auc = average_precision_score(y_true, y_score) if len(set(y_true)) == 2 else float("nan")
+            age = entry.get("age", 0.0)
+            if truth not in ("attack", "benign") or score is None:
+                continue
+            cur = flow_best.get(fid)
+            if cur is None:
+                flow_best[fid] = {
+                    "truth": truth,
+                    "max_score": float(score),
+                    "flagged": float(score) >= DETECT_THRESHOLD,
+                    "first_flag_age": (
+                        float(age) if float(score) >= DETECT_THRESHOLD else None
+                    ),
+                }
+            else:
+                cur["max_score"] = max(cur["max_score"], float(score))
+                if float(score) >= DETECT_THRESHOLD and not cur["flagged"]:
+                    cur["flagged"] = True
+                    cur["first_flag_age"] = float(age)
+
+        tp = fp = tn = fn = 0
+        y_true, y_score = [], []
+        attack_ages: list[float] = []
+        for fid, d in flow_best.items():
+            y_true.append(1 if d["truth"] == "attack" else 0)
+            y_score.append(d["max_score"])
+            if d["truth"] == "attack":
+                if d["flagged"]:
+                    tp += 1
+                    if d["first_flag_age"] is not None:
+                        attack_ages.append(d["first_flag_age"])
+                else:
+                    fn += 1
+            else:
+                if d["flagged"]:
+                    fp += 1
+                else:
+                    tn += 1
+
+        n_flows = len(flow_best)
+        acc = (tp + tn) / n_flows if n_flows > 0 else 0.0
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+
+        if len(set(y_true)) == 2:
+            roc_auc = roc_auc_score(y_true, y_score)
+            pr_auc = average_precision_score(y_true, y_score)
+        else:
+            roc_auc = float("nan")
+            pr_auc = float("nan")
+
+        median_age = float(np.median(attack_ages)) if attack_ages else None
+        p90_age = float(np.quantile(attack_ages, 0.90)) if attack_ages else None
+
         mm = st.columns(10)
-        mm[0].metric("Decisions", f"{status.get('decisions', 0):,}")
-        mm[1].metric("True positives", f"{ctr.get('tp', 0):,}")
-        mm[2].metric("True negatives", f"{ctr.get('tn', 0):,}")
-        mm[3].metric("False positives", f"{ctr.get('fp', 0):,}")
-        mm[4].metric("False negatives", f"{ctr.get('fn', 0):,}")
-        mm[5].metric("Observing", f"{ctr.get('observing', 0):,}",
-                     help="Open flows younger than 10 s — not yet judgeable.")
-        mm[6].metric("ROC-AUC", f"{roc_auc:.3f}" if roc_auc == roc_auc else "n/a",
+        mm[0].metric("Flows", f"{n_flows:,}")
+        mm[1].metric("True positives", f"{tp:,}")
+        mm[2].metric("True negatives", f"{tn:,}")
+        mm[3].metric("False positives", f"{fp:,}")
+        mm[4].metric("False negatives", f"{fn:,}")
+        mm[5].metric("Attack recall", f"{recall*100:.1f}%" if recall else "n/a")
+        mm[6].metric("Benign FPR", f"{fpr*100:.4f}%" if (fp + tn) > 0 else "n/a")
+        mm[7].metric("ROC-AUC", f"{roc_auc:.3f}" if roc_auc == roc_auc else "n/a",
                      help="Area under ROC curve (1.0 = perfect, 0.5 = random)")
-        mm[7].metric("PR-AUC", f"{pr_auc:.3f}" if pr_auc == pr_auc else "n/a",
+        mm[8].metric("PR-AUC", f"{pr_auc:.3f}" if pr_auc == pr_auc else "n/a",
                      help="Area under Precision-Recall curve (1.0 = perfect)")
-        mm[8].metric("limit_req", "ON" if lim.get("rate") else "off")
-        mm[9].metric("limit_conn", "ON" if lim.get("conn") else "off")
+        mm[9].metric("limit_req", "ON" if lim.get("rate") else "off")
+
+        # Side-log info (off-the-wire labels)
+        sl_path = status.get("side_log_path")
+        sl_rate = status.get("side_log_match_rate")
+        if sl_path:
+            st.caption(
+                f"Side-log labels: `{sl_path}`  "
+                f"join match rate: {sl_rate}%  "
+                f"(unmatched flows shown as 'unmatched', never guessed)"
+            )
 
     if not feed and not running:
         st.info("Press ▶ Start live demo to capture and score real packets.")
@@ -629,7 +694,7 @@ def lab_body() -> None:
     st.markdown("**Live decisions** (newest first)")
     if feed:
         dfl = pd.DataFrame(feed)
-        keep = [c for c in ["i", "entity", "truth", "profile", "age",
+        keep = [c for c in ["i", "entity", "truth", "display_guess", "age",
                             "model_score", "score", "evidence",
                             "group", "mechanism", "action", "final"]
                 if c in dfl.columns]

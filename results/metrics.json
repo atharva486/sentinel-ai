@@ -1,0 +1,30 @@
+{
+  "confusion": {
+    "threshold": 0.3,
+    "TP": 2871,
+    "TN": 3134,
+    "FP": 1,
+    "FN": 0,
+    "n_flows": 6006,
+    "n_attack_flows": 2871,
+    "n_benign_flows": 3135,
+    "accuracy": 0.9998,
+    "precision": 0.9997,
+    "recall": 1.0,
+    "f1": 0.9998,
+    "benign_flows_flagged": 1,
+    "benign_flows_total": 3135,
+    "attack_flows_flagged": 2871,
+    "attack_flows_total": 2871,
+    "benign_flow_flag_rate": 0.0003,
+    "attack_flow_flag_rate": 1.0,
+    "attack_first_flag_age_median": 60.0,
+    "attack_first_flag_age_p90": 135.0,
+    "attack_flows_with_first_flag": 2871
+  },
+  "pr_auc": 1.0,
+  "roc_auc": 1.0,
+  "ece": 0.000204,
+  "test_rows": 6006,
+  "threshold_used": 0.3
+}
