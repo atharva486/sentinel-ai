@@ -31,3 +31,18 @@ __pycache__/
 
 # Misc
 get-docker.sh
+
+# Archived sessions (host-run, no pcaps)
+sentinel_archive/
+
+# Phase 3 regenerated/scratch data
+phase3_findings.md
+
+# Host-generated side logs (not Docker session data)
+reports/runs/*/side_log.jsonl
+
+# Regenerated feature parquets per session
+data/features_run?.parquet
+
+# Temporary evaluation outputs
+results/binary_study/

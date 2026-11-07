@@ -102,3 +102,24 @@ This section documents known limitations and open issues, as identified during t
 | P2 | Runtime CSVs not gitignored | Add explicit patterns to `.gitignore` | Low |
 | P2 | scikit-learn version pin | Align `dashboard/requirements.txt` with root `requirements.txt` | Low |
 | P2 | No unit tests | Add basic test suite for features/merge/score modules | Medium |
+## Known Issues and Notes
+
+### Session Data Coverage
+- **runH through runL**: Both side logs and pcap capture available. These 12 sessions (6 train/val/test splits) are fully verified.
+- **runM through runX**: Side logs captured from host-based generation, but **pcap files were NOT captured**. These 18 sessions should be excluded from any analysis requiring pcap Feature extraction or header parsing via `parse_http`. Side log data is available but pcap-dependent analysis cannot use these sessions.
+
+### Model Artifacts
+- **calibration_result_current.joblib**: 16-feature model (bytes_in, bytes_in_per_s, requests_per_s, packets_per_s, interarrival_mean/std/max, concurrent_conns, conns_per_second_opened, requests_per_conn_so_far, conn_age_s, stall_time_s, body_frac_sent, bytes_declared, body_drip_rate_bps, header_complete). Do not cite the 16-version as 15-base.
+- **Legacy labels (legacy_label)**: Contaminated by missing `\r\n\r\n` header terminator (fixed in commit c4b02b7). Do not use for model training; use side_log labels instead.
+
+### Evaluation
+- Test split (runK+runL): 99.2% benign flows, exceeding 90% requirement.
+- Each attack type has 100+ flows in test split (slowloris: 457, ruddy: 50, low_and_slow: 50).
+- Prior shift: calibration trained on val (~72.5% benign) but test is 99.2% benign. Use threshold 0.30 as project decision boundary; do not tune on test.
+- Zero-shot old model: slowloris recall=1.0 at all as_of thresholds, FPR=0.0000 on benign.
+- Retrained model: see results/binary_study/verified_output.txt for per-as_of metrics at threshold 0.30.
+  The single source of truth for all binary study results is results/binary_study/verified_output.txt.
+
+### Typos Fixed
+- `ruddy` → `rudy` (R.U.D.Y. = See You Die)
+- `Benefit` → `Benign`
