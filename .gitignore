@@ -45,4 +45,7 @@ reports/runs/*/side_log.jsonl
 data/features_run?.parquet
 
 # Temporary evaluation outputs
-results/binary_study/
+
+data/*_filtered.parquet
+data/features_run?.parquet
+reports/runs/

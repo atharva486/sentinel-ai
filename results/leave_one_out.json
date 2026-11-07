@@ -1,0 +1,7 @@
+{
+  "attack_types": [
+    "flood",
+    "slowloris"
+  ],
+  "results": {}
+}

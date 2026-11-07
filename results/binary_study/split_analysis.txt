@@ -1,0 +1,36 @@
+Binary Study Split Analysis
+==================================================
+
+TRAIN:
+  total: 4012
+  attacks: 2521
+  benign: 1491
+  role distribution: {'attack': 2521, 'benign': 1491}
+  ip_role distribution: {'attack': 2521, 'benign': 1491}
+  flow ID overlap: set()
+  unique flow_ids: 848
+
+VAL:
+  total: 3538
+  attacks: 1146
+  benign: 2392
+  role distribution: {'benign': 2392, 'attack': 1146}
+  ip_role distribution: {'benign': 2392, 'attack': 1146}
+  flow ID overlap: set()
+  unique flow_ids: 948
+
+TEST:
+  total: 9669
+  attacks: 2750
+  benign: 6919
+  role distribution: {'benign': 6919, 'attack': 2750}
+  ip_role distribution: {'benign': 6919, 'attack': 2750}
+  flow ID overlap: {'172.18.0.5:36753-172.18.0.2:80', '172.18.0.5:45020-172.18.0.2:80', '172.18.0.5:45520-172.18.0.2:80', '172.18.0.5:43085-172.18.0.2:80', '172.18.0.5:50313-172.18.0.2:80', '172.18.0.5:41169-172.18.0.2:80', '172.18.0.5:40739-172.18.0.2:80', '172.18.0.5:47607-172.18.0.2:80'}
+  unique flow_ids: 2441
+
+Flow ID overlaps between splits:
+  Train vs Test: 20 flow IDs
+  Sample: ['172.18.0.5:45712-172.18.0.2:80', '172.18.0.5:36558-172.18.0.2:80', '172.18.0.5:45812-172.18.0.2:80', '172.18.0.5:35117-172.18.0.2:80', '172.18.0.5:45828-172.18.0.2:80']
+  Val vs Test: 14 flow IDs
+  Sample: ['172.18.0.5:40987-172.18.0.2:80', '172.18.0.5:54271-172.18.0.2:80', '172.18.0.5:57907-172.18.0.2:80', '172.18.0.5:47699-172.18.0.2:80', '172.18.0.5:46517-172.18.0.2:80']
+  Train vs Val: 5 flow IDs

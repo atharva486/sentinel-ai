@@ -8,6 +8,14 @@ import time
 
 LAB_HOST = "proxy"
 LAB_PORT = 80
+
+# Allow overriding via environment variables for running from the host
+# (connecting to the published proxy port).
+import os as _os
+if _os.environ.get("LAB_HOST"):
+    LAB_HOST = _os.environ["LAB_HOST"]
+if _os.environ.get("LAB_PORT"):
+    LAB_PORT = int(_os.environ["LAB_PORT"])
 SRC_IPS: list[str] = []
 
 # Opens a TCP connection, optionally pinned to a specific source IP.
@@ -72,6 +80,8 @@ async def benign_worker(agent: int, duration: int, think_lo: float,
             continue
         sock = writer.get_extra_info("sockname")
         src_port = sock[1] if sock else None
+        if src_ip is None and sock:
+            src_ip = sock[0]
         for _ in range(random.randint(1, 3)):
             if time.time() >= end:
                 break
@@ -168,6 +178,8 @@ async def slowloris_worker(conn_id: int, duration: int,
     reader, writer = await _connect(src_ip)
     sock = writer.get_extra_info("sockname")
     src_port = sock[1] if sock else None
+    if src_ip is None and sock:
+        src_ip = sock[0]
     start_ts = time.time()
     writer.write(f"GET /api/txn?q={'y' * 70}&u={conn_id} HTTP/1.1\r\n"
                  f"Host: api\r\nUser-Agent: Mozilla/5.0\r\n".encode())
@@ -204,6 +216,8 @@ async def flood_worker(conn_id: int, duration: int, req_per_conn: int = 200,
     reader, writer = await _connect(src_ip)
     sock = writer.get_extra_info("sockname")
     src_port = sock[1] if sock else None
+    if src_ip is None and sock:
+        src_ip = sock[0]
     start_ts = time.time()
 
     while time.time() < end:
@@ -252,9 +266,10 @@ async def ruddy_worker(conn_id: int, duration: int,
     reader, writer = await _connect(src_ip)
     sock = writer.get_extra_info("sockname")
     src_port = sock[1] if sock else None
+    if src_ip is None and sock:
+        src_ip = sock[0]
     start_ts = time.time()
     # Complete header with a large Content-Length but no \\r\\n\\r\\n body
-    # terminator problem -- header IS complete, body is the slow part.
     head = (f"POST /api/upload HTTP/1.1\r\n"
             f"Host: api\r\nUser-Agent: Mozilla/5.0\r\n"
             f"Content-Length: {body_len}\r\n"
@@ -266,8 +281,8 @@ async def ruddy_worker(conn_id: int, duration: int,
         chunk = min(drip_chunk, body_len - sent)
         writer.write(b"x" * chunk)
         try:
-            await writer.drain()
-        except ConnectionResetError:
+            await asyncio.wait_for(writer.drain(), timeout=5.0)
+        except (ConnectionResetError, asyncio.TimeoutError, OSError):
             break
         sent += chunk
         await asyncio.sleep(random.uniform(drip_interval * 0.5,
@@ -307,6 +322,8 @@ async def low_and_slow_worker(conn_id: int, duration: int,
     reader, writer = await _connect(src_ip)
     sock = writer.get_extra_info("sockname")
     src_port = sock[1] if sock else None
+    if src_ip is None and sock:
+        src_ip = sock[0]
     start_ts = time.time()
     while time.time() < end:
         for _ in range(req_per_conn):

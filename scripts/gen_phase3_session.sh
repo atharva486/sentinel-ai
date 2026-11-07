@@ -62,7 +62,7 @@ if [ "$TOTAL_BENIGN" -gt 0 ]; then
     echo "  Running $TOTAL_BENIGN benign connections from legit-loadgen..."
     docker compose exec -T legit-loadgen python generate.py --mode mix --duration $((DURATION + 30)) --label "$SESSION" \
         --benign-mix "$BENIGN_MIX" --side-log "/reports/runs/$SESSION/side_log.jsonl" \
-        --dur-min 30 --dur-max 180 &
+        --dur-min 30 --dur-max 180
 fi
 
 # Run slowloris + ruddy from slow-gen container
@@ -71,7 +71,7 @@ if [ "$SLOW_ATTACK" -gt 0 ]; then
     echo "  Running $SLOW_ATTACK slow attacks from slow-gen..."
     docker compose exec -T slow-gen python generate.py --mode mix --duration $((DURATION + 30)) --label "$SESSION" \
         --attack-mix "slowloris:$ATTACK_SLOWLORIS,ruddy:$ATTACK_RUDY" --side-log "/reports/runs/$SESSION/side_log.jsonl" \
-        --dur-min 30 --dur-max 180 &
+        --dur-min 30 --dur-max 180
 fi
 
 # Run flood + low_and_slow from flood-gen container
@@ -80,11 +80,8 @@ if [ "$FLOOD_ATTACK" -gt 0 ]; then
     echo "  Running $FLOOD_ATTACK fast attacks from flood-gen..."
     docker compose exec -T flood-gen python generate.py --mode mix --duration $((DURATION + 30)) --label "$SESSION" \
         --attack-mix "flood:$ATTACK_FLOOD,low_and_slow:$ATTACK_LOWANDSSLOW" --side-log "/reports/runs/$SESSION/side_log.jsonl" \
-        --dur-min 30 --dur-max 180 &
+        --dur-min 30 --dur-max 180
 fi
-
-# Wait for all background jobs
-wait
 
 echo "  Traffic generation complete, waiting for side log to flush..."
 sleep 5
