@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 import argparse
+import atexit
 import asyncio
 import json
 import random
+import signal
 import time
 
 LAB_HOST = "proxy"
@@ -17,6 +19,26 @@ if _os.environ.get("LAB_HOST"):
 if _os.environ.get("LAB_PORT"):
     LAB_PORT = int(_os.environ["LAB_PORT"])
 SRC_IPS: list[str] = []
+
+# Connections opened but not yet closed in the side log: {"path": ..., "row": {...}}.
+# A row is written with end_ts=None when the connection is opened, updated with
+# a close row (end_ts set) when the connection ends, and every row still open
+# is flushed (end_ts = now) on SIGTERM/SIGINT/process exit, so connections
+# alive at the end of the run are still logged.
+_OPEN: list[dict] = []
+
+
+def _flush_open() -> None:
+    now = time.time()
+    for entry in _OPEN:
+        row = entry["row"]
+        if row.get("end_ts") is None:
+            row["end_ts"] = now
+            _side_log(entry["path"], row)
+
+
+atexit.register(_flush_open)
+
 
 # Opens a TCP connection, optionally pinned to a specific source IP.
 async def _connect(src_ip: str | None = None):
@@ -66,7 +88,6 @@ async def benign_worker(agent: int, duration: int, think_lo: float,
         await asyncio.sleep(random.uniform(0.0, stagger))
     end = time.time() + duration
     uid = f"u{agent}"
-    start_ts = time.time()
 
     while time.time() < end:
         stats["connections_attempted"] = stats.get("connections_attempted", 0) + 1
@@ -82,6 +103,23 @@ async def benign_worker(agent: int, duration: int, think_lo: float,
         src_port = sock[1] if sock else None
         if src_ip is None and sock:
             src_ip = sock[0]
+        conn_start = time.time()
+        conn_row = {
+            "src_ip": src_ip,
+            "src_port": src_port,
+            "start_ts": conn_start,
+            "end_ts": None,
+            "role": "benign",
+            "attack_type": f"benign_{sub_type}",
+            "tool": "generate.py",
+            "parameters": {"duration": duration, "think_lo": think_lo,
+                           "think_hi": think_hi, "slow_fraction": slow_fraction,
+                           "stagger": stagger, "sub_type": sub_type,
+                           "netem_delay_ms": netem_delay_ms,
+                           "netem_rate_kbps": netem_rate_kbps},
+        }
+        _OPEN.append({"path": side_log, "row": conn_row})
+        _side_log(side_log, conn_row)
         for _ in range(random.randint(1, 3)):
             if time.time() >= end:
                 break
@@ -143,26 +181,59 @@ async def benign_worker(agent: int, duration: int, think_lo: float,
                 stats["exceptions"].append(f"agent={agent} request: {type(e).__name__}: {e}")
                 break
             await asyncio.sleep(random.uniform(think_lo, think_hi))
-        _side_log(side_log, {
-            "src_ip": src_ip,
-            "src_port": src_port,
-            "start_ts": start_ts,
-            "end_ts": time.time(),
-            "role": "benign",
-            "attack_type": f"benign_{sub_type}",
-            "tool": "generate.py",
-            "parameters": {"duration": duration, "think_lo": think_lo,
-                           "think_hi": think_hi, "slow_fraction": slow_fraction,
-                           "stagger": stagger, "sub_type": sub_type,
-                           "netem_delay_ms": netem_delay_ms,
-                           "netem_rate_kbps": netem_rate_kbps},
-        })
-        writer.close()
-        try:
-            await writer.wait_closed()
-        except Exception:
-            pass
-        await asyncio.sleep(random.uniform(0.05, 0.4))
+    close_ts = time.time()
+    close_row = dict(conn_row)
+    close_row["end_ts"] = close_ts
+    _side_log(side_log, close_row)
+    conn_row["end_ts"] = close_ts
+    writer.close()
+    try:
+        await writer.wait_closed()
+    except Exception:
+        pass
+    await asyncio.sleep(random.uniform(0.05, 0.4))
+
+
+# Runs ``count`` flood connections as short staggered bursts across ``duration``
+# seconds.  At most ``max_concurrent`` flood connections are open at once and
+# each lasts at most ``burst_duration`` seconds; new bursts start throughout
+# the run (roughly ``count`` flows total).  The per-connection flood behaviour
+# (request rate, requests) of flood_worker is unchanged -- only the schedule
+# differs.  Offline lab usage is unaffected (flood_burst defaults to False).
+async def _flood_burst_runner(base_id: int, count: int, duration: int,
+                              req_per_conn: int = 200,
+                              burst_duration: int = 10,
+                              max_concurrent: int = 3,
+                              stagger: float = 0.0,
+                              src_ip: str | None = None,
+                              side_log: str | None = None):
+    end = time.time() + duration
+    inflight: set = set()
+    started = 0
+    while started < count and time.time() < end:
+        inflight = {t for t in inflight if not t.done()}
+        if len(inflight) < max_concurrent:
+            remaining = end - time.time()
+            conn_dur = min(random.uniform(4.0, float(burst_duration)),
+                           max(0.0, remaining))
+            if conn_dur < 1.0:
+                break
+            cid = base_id + started
+            started += 1
+            if stagger > 0:
+                await asyncio.sleep(random.uniform(0.0, stagger))
+            t = asyncio.create_task(flood_worker(
+                cid, int(conn_dur), req_per_conn=req_per_conn, stagger=0.0,
+                src_ip=_ip_for(cid), side_log=side_log))
+            inflight.add(t)
+            if started < count:
+                # Stagger starts across the run so new bursts begin throughout,
+                # not all at once.
+                await asyncio.sleep(max(0.0, remaining / (count - started)))
+        else:
+            await asyncio.sleep(0.1)
+    if inflight:
+        await asyncio.gather(*inflight, return_exceptions=True)
 
 
 # Simulates a Slowloris attack that never terminates its HTTP header.
@@ -181,6 +252,19 @@ async def slowloris_worker(conn_id: int, duration: int,
     if src_ip is None and sock:
         src_ip = sock[0]
     start_ts = time.time()
+    conn_row = {
+        "src_ip": src_ip,
+        "src_port": src_port,
+        "start_ts": start_ts,
+        "end_ts": None,
+        "role": "attack",
+        "attack_type": "slowloris",
+        "tool": "generate.py",
+        "parameters": {"duration": duration, "keepalive_interval": keepalive_interval,
+                       "stagger": stagger},
+    }
+    _OPEN.append({"path": side_log, "row": conn_row})
+    _side_log(side_log, conn_row)
     writer.write(f"GET /api/txn?q={'y' * 70}&u={conn_id} HTTP/1.1\r\n"
                  f"Host: api\r\nUser-Agent: Mozilla/5.0\r\n".encode())
     await writer.drain()
@@ -190,17 +274,11 @@ async def slowloris_worker(conn_id: int, duration: int,
         await writer.drain()
         await asyncio.sleep(random.uniform(keepalive_interval * 0.5,
                                            keepalive_interval * 1.5))
-    _side_log(side_log, {
-        "src_ip": src_ip,
-        "src_port": src_port,
-        "start_ts": start_ts,
-        "end_ts": time.time(),
-        "role": "attack",
-        "attack_type": "slowloris",
-        "tool": "generate.py",
-        "parameters": {"duration": duration, "keepalive_interval": keepalive_interval,
-                       "stagger": stagger},
-    })
+    close_ts = time.time()
+    close_row = dict(conn_row)
+    close_row["end_ts"] = close_ts
+    _side_log(side_log, close_row)
+    conn_row["end_ts"] = close_ts
     writer.close()
 
 
@@ -219,6 +297,19 @@ async def flood_worker(conn_id: int, duration: int, req_per_conn: int = 200,
     if src_ip is None and sock:
         src_ip = sock[0]
     start_ts = time.time()
+    conn_row = {
+        "src_ip": src_ip,
+        "src_port": src_port,
+        "start_ts": start_ts,
+        "end_ts": None,
+        "role": "attack",
+        "attack_type": "flood",
+        "tool": "generate.py",
+        "parameters": {"duration": duration, "req_per_conn": req_per_conn,
+                       "stagger": stagger},
+    }
+    _OPEN.append({"path": side_log, "row": conn_row})
+    _side_log(side_log, conn_row)
 
     while time.time() < end:
         for _ in range(req_per_conn):
@@ -232,17 +323,11 @@ async def flood_worker(conn_id: int, duration: int, req_per_conn: int = 200,
         except asyncio.TimeoutError:
             pass
         await asyncio.sleep(random.uniform(0.03, 0.06))
-    _side_log(side_log, {
-        "src_ip": src_ip,
-        "src_port": src_port,
-        "start_ts": start_ts,
-        "end_ts": time.time(),
-        "role": "attack",
-        "attack_type": "flood",
-        "tool": "generate.py",
-        "parameters": {"duration": duration, "req_per_conn": req_per_conn,
-                       "stagger": stagger},
-    })
+    close_ts = time.time()
+    close_row = dict(conn_row)
+    close_row["end_ts"] = close_ts
+    _side_log(side_log, close_row)
+    conn_row["end_ts"] = close_ts
     writer.close()
 
 
@@ -269,6 +354,20 @@ async def ruddy_worker(conn_id: int, duration: int,
     if src_ip is None and sock:
         src_ip = sock[0]
     start_ts = time.time()
+    conn_row = {
+        "src_ip": src_ip,
+        "src_port": src_port,
+        "start_ts": start_ts,
+        "end_ts": None,
+        "role": "attack",
+        "attack_type": "ruddy",
+        "tool": "generate.py",
+        "parameters": {"duration": duration, "drip_interval": drip_interval,
+                       "body_len": body_len, "drip_chunk": drip_chunk,
+                       "stagger": stagger},
+    }
+    _OPEN.append({"path": side_log, "row": conn_row})
+    _side_log(side_log, conn_row)
     # Complete header with a large Content-Length but no \\r\\n\\r\\n body
     head = (f"POST /api/upload HTTP/1.1\r\n"
             f"Host: api\r\nUser-Agent: Mozilla/5.0\r\n"
@@ -287,18 +386,11 @@ async def ruddy_worker(conn_id: int, duration: int,
         sent += chunk
         await asyncio.sleep(random.uniform(drip_interval * 0.5,
                                            drip_interval * 1.5))
-    _side_log(side_log, {
-        "src_ip": src_ip,
-        "src_port": src_port,
-        "start_ts": start_ts,
-        "end_ts": time.time(),
-        "role": "attack",
-        "attack_type": "ruddy",
-        "tool": "generate.py",
-        "parameters": {"duration": duration, "drip_interval": drip_interval,
-                       "body_len": body_len, "drip_chunk": drip_chunk,
-                       "stagger": stagger},
-    })
+    close_ts = time.time()
+    close_row = dict(conn_row)
+    close_row["end_ts"] = close_ts
+    _side_log(side_log, close_row)
+    conn_row["end_ts"] = close_ts
     writer.close()
 
 
@@ -325,6 +417,20 @@ async def low_and_slow_worker(conn_id: int, duration: int,
     if src_ip is None and sock:
         src_ip = sock[0]
     start_ts = time.time()
+    conn_row = {
+        "src_ip": src_ip,
+        "src_port": src_port,
+        "start_ts": start_ts,
+        "end_ts": None,
+        "role": "attack",
+        "attack_type": "low_and_slow",
+        "tool": "generate.py",
+        "parameters": {"duration": duration, "req_per_conn": req_per_conn,
+                       "inter_req_gap": inter_req_gap,
+                       "body_len": body_len, "stagger": stagger},
+    }
+    _OPEN.append({"path": side_log, "row": conn_row})
+    _side_log(side_log, conn_row)
     while time.time() < end:
         for _ in range(req_per_conn):
             if time.time() >= end:
@@ -341,18 +447,11 @@ async def low_and_slow_worker(conn_id: int, duration: int,
                                                inter_req_gap * 1.5))
         # Close and reopen occasionally to mimic benign churn
         await asyncio.sleep(random.uniform(0.5, 2.0))
-    _side_log(side_log, {
-        "src_ip": src_ip,
-        "src_port": src_port,
-        "start_ts": start_ts,
-        "end_ts": time.time(),
-        "role": "attack",
-        "attack_type": "low_and_slow",
-        "tool": "generate.py",
-        "parameters": {"duration": duration, "req_per_conn": req_per_conn,
-                       "inter_req_gap": inter_req_gap,
-                       "body_len": body_len, "stagger": stagger},
-    })
+    close_ts = time.time()
+    close_row = dict(conn_row)
+    close_row["end_ts"] = close_ts
+    _side_log(side_log, close_row)
+    conn_row["end_ts"] = close_ts
     writer.close()
 
 # Picks this worker's source IP from the container's pool.
@@ -374,6 +473,11 @@ def _ip_for(i: int) -> str | None:
 #   [("slowloris", 10), ("ruddy", 5), ("flood", 3), ("low_and_slow", 5)]
 # ``dur_min``/``dur_max``: per-connection duration range in seconds --
 #   randomized so lifetimes overlap between benign and attack.
+# ``flood_burst``: when True (live demo profile), flood connections run as
+#   short staggered bursts via _flood_burst_runner: at most ``max_concurrent``
+#   concurrent flood connections, each lasting <= ``burst_duration`` seconds,
+#   with ~``count`` flows started across ``duration`` seconds.  Per-connection
+#   flood behaviour is unchanged; offline lab usage is unaffected.
 async def run_mix(duration: int,
                   benign_mix: list[tuple[str, int]],
                   attack_mix: list[tuple[str, int]],
@@ -381,7 +485,10 @@ async def run_mix(duration: int,
                   stagger: float | None = None,
                   side_log: str | None = None,
                   dur_min: int = 30,
-                  dur_max: int = 180):
+                  dur_max: int = 180,
+                  flood_burst: bool = False,
+                  burst_duration: int = 10,
+                  max_concurrent: int = 3):
     if stagger is None:
         stagger = duration * 0.6
     tasks = []
@@ -422,6 +529,16 @@ async def run_mix(duration: int,
                     stagger=stagger,
                     src_ip=_ip_for(conn_id), side_log=side_log))
             elif attack_type == "flood":
+                if flood_burst:
+                    tasks.append(_flood_burst_runner(
+                        conn_id, count, duration,
+                        req_per_conn=random.randint(50, 1000),
+                        burst_duration=burst_duration,
+                        max_concurrent=max_concurrent,
+                        stagger=stagger,
+                        src_ip=_ip_for(conn_id), side_log=side_log))
+                    conn_id += count
+                    continue
                 tasks.append(flood_worker(
                     i, conn_dur,
                     req_per_conn=random.randint(50, 1000),
@@ -438,7 +555,6 @@ async def run_mix(duration: int,
             else:
                 raise ValueError(f"unknown attack type: {attack_type}")
             conn_id += 1
-
     n_benign = sum(c for _, c in benign_mix)
     n_attack = sum(c for _, c in attack_mix)
     print(f"[{label}] {n_benign} benign ({[s for s,_ in benign_mix]}) + "
@@ -616,6 +732,17 @@ def main() -> None:
     ap.add_argument("--req-per-conn", type=int, default=200,
                     help="flood: requests written per write() burst "
                          "(lower = smaller pcaps, same high-rate signature)")
+    ap.add_argument("--flood-burst", action="store_true",
+                    help="run flood connections as short staggered bursts "
+                         "(live demo profile): at most --max-concurrent "
+                         "concurrent flood connections, each lasting at most "
+                         "--burst-duration seconds, started across the run")
+    ap.add_argument("--burst-duration", type=int, default=10,
+                    help="flood-burst: maximum seconds per flood burst "
+                         "connection (default 10)")
+    ap.add_argument("--max-concurrent", type=int, default=3,
+                    help="flood-burst: max concurrent flood connections "
+                         "(default 3)")
     ap.add_argument("--mixed", type=int, default=0,
                     help="mixed mode: N source IPs, each playing a real-world "
                          "benign/attack/switch profile (per-flow labels)")
@@ -652,35 +779,59 @@ def main() -> None:
     # legacy --benign/--slow/--flood counts.
     if not benign_mix and not attack_mix:
         benign_mix = [("normal", args.benign)]
+        legacy_attack = []
         if args.slow > 0:
-            attack_mix.append(("slowloris", args.slow))
+            legacy_attack.append(("slowloris", args.slow))
         if args.flood > 0:
-            attack_mix.append(("flood", args.flood))
-
-    if args.mode == "benign":
-        asyncio.run(run_benign_only(args.duration, args.benign, args.label,
-                                    side_log=args.side_log))
-    elif args.mode in ("slow", "flood", "mix"):
-        # Legacy single-attack modes map to attack_mix.
-        if not attack_mix:
-            if args.mode == "slow":
-                attack_mix = [("slowloris", args.slow)]
-            elif args.mode == "flood":
-                attack_mix = [("flood", args.flood)]
-        asyncio.run(run_mix(args.duration, benign_mix or [("normal", 1)],
-                            attack_mix, args.label,
-                            side_log=args.side_log,
-                            dur_min=args.dur_min, dur_max=args.dur_max))
-    elif args.mode == "mixed":
-        asyncio.run(run_mixed(args.duration, args.mixed, args.label,
-                              req_per_conn=args.req_per_conn,
-                              side_log=args.side_log))
+            legacy_attack.append(("flood", args.flood))
     else:
-        asyncio.run(run_mix(args.duration, benign_mix or [("normal", 1)],
-                            attack_mix, args.label,
-                            side_log=args.side_log,
-                            dur_min=args.dur_min, dur_max=args.dur_max))
+        legacy_attack = attack_mix
+
+    async def _run() -> None:
+        loop = asyncio.get_running_loop()
+
+        def _shutdown() -> None:
+            # Flush open side-log rows (end_ts = now) so connections alive
+            # when the process is killed are still logged.
+            _flush_open()
+            loop.stop()
+
+        loop.add_signal_handler(signal.SIGTERM, _shutdown)
+        loop.add_signal_handler(signal.SIGINT, _shutdown)
+
+        if args.mode == "benign":
+            await run_benign_only(args.duration, args.benign, args.label,
+                                  side_log=args.side_log)
+        elif args.mode in ("slow", "flood", "mix"):
+            await run_mix(args.duration, benign_mix or [("normal", 1)],
+                          legacy_attack, args.label,
+                          side_log=args.side_log,
+                          dur_min=args.dur_min, dur_max=args.dur_max,
+                          flood_burst=args.flood_burst,
+                          burst_duration=args.burst_duration,
+                          max_concurrent=args.max_concurrent)
+        elif args.mode == "mixed":
+            await run_mixed(args.duration, args.mixed, args.label,
+                            req_per_conn=args.req_per_conn,
+                            side_log=args.side_log)
+        else:
+            await run_mix(args.duration, benign_mix or [("normal", 1)],
+                          legacy_attack, args.label,
+                          side_log=args.side_log,
+                          dur_min=args.dur_min, dur_max=args.dur_max,
+                          flood_burst=args.flood_burst,
+                          burst_duration=args.burst_duration,
+                          max_concurrent=args.max_concurrent)
+
+    asyncio.run(_run())
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except RuntimeError as exc:
+        # SIGTERM/SIGINT stops the loop after flushing open side-log rows;
+        # exit cleanly once the flush is done.
+        if "stopped" not in str(exc):
+            raise
+        raise SystemExit(0)

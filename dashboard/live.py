@@ -28,6 +28,8 @@ from m1_capture.features import (
 from m3_scoring.calibrate import CalibrationResult
 from mechanism import (
     CONN_LIMIT,
+    DETECT_THRESHOLD,
+    Mechanism,
     Policy,
     RATE_LIMIT,
     choose_by_shap_group,
@@ -79,9 +81,14 @@ class LiveEngine:
         )
         raw = float(self.art.model.predict_proba(X)[0, 1])
         cal = float(self.art.calibrated_score(feats))
-        shap_values = self._shap(feats)
+        # SHAP is expensive: only explain flows at/above the detect threshold,
+        # and build the TreeExplainer once.
+        if cal >= DETECT_THRESHOLD:
+            shap_values = self._shap(feats)
+        else:
+            shap_values = {name: 0.0 for name in self.art.feature_order}
         groups = shap_group_scores(shap_values)
-        mech = choose_by_shap_group(shap_values, cal)
+        mech = choose_by_shap_group(shap_values, cal) if cal >= DETECT_THRESHOLD else Mechanism()
         action = self.policy.decide(str(entity), cal)
         return {
             "raw": raw,
@@ -359,9 +366,13 @@ class LabRunner:
         self.compose(["exec", "-T", service, "sh", "-c", script], timeout=120)
 
     def start_capture(self, name: str = "live.pcap") -> subprocess.CompletedProcess:
+        # BPF: only client->proxy traffic (the flows we score).  The
+        # proxy->backend leg is dropped in software downstream; excluding it
+        # at capture time cuts the pcap volume the sensor must process.
         return self.compose(
             ["exec", "-d", "proxy", "tcpdump", "-i", "eth0", "-s", "0",
-             "-w", f"/captures/{name}", "tcp port 80"],
+             "-w", f"/captures/{name}",
+             "tcp port 80 and host 172.18.0.2 and not host 172.18.0.3"],
             timeout=60,
         )
 

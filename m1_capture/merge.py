@@ -58,7 +58,10 @@ def _match_side_log(idx: Dict[tuple, list[dict]], client_ip: str,
     best_overlap = 0.0
     for row in candidates:
         rs = float(row.get("start_ts", 0.0))
-        re_ = float(row.get("end_ts", rs))
+        re_ = row.get("end_ts")
+        # end_ts is None while the connection is still open: its window is
+        # unbounded, so any SYN at/after start_ts overlaps.
+        re_ = float("inf") if re_ is None else float(re_)
         overlap_start = max(t_start, rs)
         overlap_end = min(t_end, re_)
         overlap = max(0.0, overlap_end - overlap_start)

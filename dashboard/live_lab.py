@@ -143,7 +143,17 @@ def main() -> int:
                          "flow is clearly rate-shaped but the explanation chose "
                          "limit_conn (or vice-versa), the missing limit is added too "
                          "so a mis-attributed attack cannot slip through")
+    ap.add_argument("--shadow", action="store_true",
+                    help="shadow mode (alias for --no-enforce): detect and score "
+                         "only, never touch nginx limits -- the measurement run")
+    ap.add_argument("--model", default=str(REPO_ROOT / "models" / "sentinel_v2_13feat.joblib"),
+                    help="model artifact (joblib) used for scoring; defaults to "
+                         "the verified 13-feature model. The artifact's own "
+                         "feature_order is used to vectorise flows.")
     args = ap.parse_args()
+
+    if args.shadow:
+        args.no_enforce = True
 
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
 
@@ -153,7 +163,7 @@ def main() -> int:
         return 2
 
     runner = LabRunner()
-    engine = LiveEngine()
+    engine = LiveEngine(artifact_path=args.model)
 
     FEED_PATH.write_text("")
     write_status(running=True, mode=args.mode, started=time.time(),
@@ -215,24 +225,30 @@ def main() -> int:
                       extra=["--slow", str(args.ip_count)] + side_log_arg)
     if args.mode in ("flood", "mixed"):
         n_flood = args.ip_count * max(1, args.conns_per_ip)
+        # Live demo profile: floods run as short staggered bursts
+        # (generate.py --flood-burst), not long-lived connections.
         runner.launch("flood-gen", "flood", dur,
                       label="livelab", ip_base="172.18.17", ip_count=args.ip_count,
                       extra=["--flood", str(n_flood),
-                             "--req-per-conn", str(args.req_per_conn)] + side_log_arg)
+                             "--req-per-conn", str(args.req_per_conn),
+                             "--flood-burst", "--burst-duration", "10",
+                             "--max-concurrent", "3"] + side_log_arg)
     print(f"traffic launched (mode={args.mode}, generators running {dur}s)")
 
     sensor = LiveSensor(cap_path)
-    emitted: set = set()
     counted_flows: set = set()
     limits = {"rate": False, "conn": False}
     decisions = 0
+    dropped_upstream = 0
     t0 = time.time()
+    max_cycle_s = 0.0
 
     ON = ON_THRESHOLD
     OFF = OFF_THRESHOLD
     latest: dict = {}
     latest_mech: dict = {}
     latest_prof: dict = {}
+    http_cache: dict = {}
 
     def confusion() -> dict:
         tp = fp = tn = fn = un = observe = 0
@@ -251,8 +267,19 @@ def main() -> int:
                 "unknown": un, "observing": observe}
 
     try:
-        while time.time() - t0 < args.duration:
-            flows = sensor.poll()
+            while time.time() - t0 < args.duration:
+                cycle_t0 = time.time()
+                flows = sensor.poll()
+            # --- Only score client-facing flows (destination 172.18.0.2:80) ---
+            client_flows = []
+            for fs in flows:
+                # fs.client_ip is the source IP; check if destination is proxy 172.18.0.2:80
+                # The flow metadata has client_ip and server_ip; drop if dst is backend
+                if getattr(fs, 'server_ip', None) == '172.18.0.3' and fs.server_port == 80:
+                    dropped_upstream += 1
+                    continue
+                client_flows.append(fs)
+            # --- End client-facing filter ---
             now = sensor.latest_ts or time.time()
 
             # Refresh side-log index from the mounted volume each iteration.
@@ -273,21 +300,27 @@ def main() -> int:
             for fs in flows:
                 if fs.t_first <= 0 or fs.fwd_bytes <= 0:
                     continue
+                # Re-score every active client flow each cycle until it closes.
+                # No per-flow emitted dedup: each cycle scores the flow anew.
+                # Only skip if this flow_id was already finalized in this run.
+                if fs.flow_id in counted_flows and fs.t_close is not None:
+                    continue
+                counted_flows.add(fs.flow_id)
                 age = ((fs.t_close - fs.t_first) if fs.t_close is not None
                        else max(0.0, now - fs.t_first))
                 t_end = fs.t_close if fs.t_close is not None else fs.t_last
                 flow_meta[str(fs.flow_id)] = (fs.client_ip, fs.client_port,
                                               fs.t_first, t_end)
-                bucket = int(min(age, 600) // 15)
-                key = (fs.flow_id, "final" if fs.t_close is not None else bucket)
-                if key in emitted:
-                    continue
-                emitted.add(key)
-                if len(emitted) > 200_000:
-                    emitted.clear()
 
-                rec = fs.to_record()
-                http = parse_http(bytes.fromhex(rec["fwd_payload"]))
+                fid = fs.flow_id
+                entry = http_cache.get(fid)
+                if entry is not None and entry[0] == fs.fwd_bytes and entry[1] == fs.t_first:
+                    http = entry[2]
+                else:
+                    # Parse the fwd payload once per change: bytes() avoids the
+                    # hex round-trip, and the cache avoids re-parsing every cycle.
+                    http = parse_http(bytes(fs.fwd_payload))
+                    http_cache[fid] = (fs.fwd_bytes, fs.t_first, http)
 
                 # Base per-connection features (decision-time, no IP context).
                 conn_state = {
@@ -298,7 +331,7 @@ def main() -> int:
                     "fwd_times": list(fs.fwd_times),
                     "n_requests_seen": fs.n_requests_seen,
                     "client_ip": fs.client_ip,
-                    "flow_id": fs.flow_id,
+                    "flow_id": fid,
                 }
                 base_feats = features_http(conn_state, http, now)
                 # IP-level context (escalation only, Phase 5).  Merged into
@@ -399,6 +432,7 @@ def main() -> int:
             write_status(running=True, mode=args.mode, decisions=decisions,
                          flows_seen=len(flows), counters=confusion(),
                          limits=limits, updated=time.time())
+            max_cycle_s = max(max_cycle_s, time.time() - cycle_t0)
             time.sleep(2.0)
     except KeyboardInterrupt:
         print("interrupted")
@@ -512,6 +546,70 @@ def main() -> int:
                 fpr = (b["fp"] / (b["fp"] + b["tn"]) * 100) if (b["fp"] + b["tn"]) else 0.0
                 print(f"  {at}: total={b['total']} TP={b['tp']} FP={b['fp']} "
                       f"TN={b['tn']} FN={b['fn']} recall={rec:.1f}% fpr={fpr:.4f}%")
+
+            # ---- Per unique flow, final decision (unlabelled excluded) ----
+            per_flow: dict[str, list[dict]] = {}
+            for d in final_feed:
+                per_flow.setdefault(d["flow"], []).append(d)
+            client_flows = len(per_flow)
+            multi = sum(1 for ds in per_flow.values() if len(ds) >= 2)
+
+            tp = fp = tn = fn = 0
+            per_type: dict[str, dict[str, int]] = {}
+            first_flag_age: dict[str, float] = {}
+            for fid, ds in per_flow.items():
+                t, at = final_truth.get(fid, ("unmatched", "unmatched"))
+                if t == "unmatched":
+                    continue
+                d = ds[-1]  # final decision for the flow
+                pred = d["score"] >= COUNT_THRESHOLD
+                b = per_type.setdefault(at, {"tp": 0, "fp": 0, "tn": 0, "fn": 0,
+                                             "total": 0})
+                b["total"] += 1
+                if t == "attack":
+                    if pred:
+                        tp += 1
+                        b["tp"] += 1
+                        if fid not in first_flag_age:
+                            first_flag_age[fid] = d["age"]
+                    else:
+                        fn += 1
+                        b["fn"] += 1
+                else:
+                    if pred:
+                        fp += 1
+                        b["fp"] += 1
+                    else:
+                        tn += 1
+                        b["tn"] += 1
+
+            print("\n=== Per unique flow, final decision (unlabelled excluded) ===")
+            print(f"client flows seen:        {client_flows}")
+            print(f"side-log rows:            {n_rows}")
+            print(f"join coverage:            {match_rate:.1f}%")
+            print(f"flows with >= 2 decisions: {multi}/{client_flows} = "
+                  f"{100.0 * multi / max(1, client_flows):.1f}%")
+            print(f"TP={tp} FP={fp} TN={tn} FN={fn}")
+            if tp + fn:
+                print(f"attack recall: {tp / (tp + fn) * 100:.1f}%")
+            if fp + tn:
+                print(f"benign FPR: {fp / (fp + tn) * 100:.4f}%")
+            print("per attack_type:")
+            for at, b in sorted(per_type.items()):
+                rec = (b["tp"] / (b["tp"] + b["fn"]) * 100) if (b["tp"] + b["fn"]) else 0.0
+                fpr = (b["fp"] / (b["fp"] + b["tn"]) * 100) if (b["fp"] + b["tn"]) else 0.0
+                print(f"  {at}: total={b['total']} TP={b['tp']} FP={b['fp']} "
+                      f"TN={b['tn']} FN={b['fn']} recall={rec:.1f}% fpr={fpr:.4f}%")
+            flagged_attack = [a for a, t in final_truth.items()
+                              if t[0] == "attack" and a in first_flag_age]
+            if flagged_attack:
+                ages = [first_flag_age[a] for a in flagged_attack]
+                print(f"attack flows flagged: {len(flagged_attack)}; "
+                      f"age at first flag: min={min(ages):.1f}s "
+                      f"mean={sum(ages) / len(ages):.1f}s max={max(ages):.1f}s")
+            else:
+                print("attack flows flagged: 0")
+            print(f"max cycle time: {max_cycle_s:.3f}s")
 
             # Update latest with final truth so the dashboard shows joined truth.
             for fid, (t, at) in final_truth.items():
