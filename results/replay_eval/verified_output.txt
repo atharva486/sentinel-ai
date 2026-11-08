@@ -1,0 +1,33 @@
+decisions: 49570   flows seen: 1862   side-log rows: 1830 (duplicate (ip,port) keys dropped: 1)
+join coverage: labelled flows / flows seen = 1829/1862 = 98.2%
+               side-log rows seen as a flow  = 1829/1830
+
+flows by label:
+role        attack_type  
+attack      flood              27
+            slowloris         240
+benign      benign_normal    1562
+unlabelled  unlabelled         33
+
+flows older than 2 s: 1862; with >= 2 decisions: 1862
+
+== per flow, flagged at least once during its life
+attack  flows   267  flagged   266  rate 0.9963  95% CI [0.9791, 0.9993]
+benign  flows  1562  flagged    52  rate 0.0333  95% CI [0.0255, 0.0434]
+   flood        flows    27  flagged    27  rate 1.0000  95% CI [0.8754, 1.0000]
+   slowloris    flows   240  flagged   239  rate 0.9958  95% CI [0.9768, 0.9993]
+unlabelled flows 33 (excluded from all metrics): flagged 33, decisions 1976
+
+== detection time, one point per flow
+  t | attack: flows flagged  rate [95% CI]        | benign: flows flagged  rate [95% CI]
+  1 |          267     205  0.768 [0.714, 0.814] |         1562      15  0.0096 [0.0058, 0.0158]
+  2 |          267     266  0.996 [0.979, 0.999] |         1562      26  0.0166 [0.0114, 0.0243]
+  3 |          267     266  0.996 [0.979, 0.999] |         1562      40  0.0256 [0.0189, 0.0347]
+  5 |          267     266  0.996 [0.979, 0.999] |         1504      47  0.0312 [0.0236, 0.0413]
+ 10 |          267     266  0.996 [0.979, 0.999] |          466      16  0.0343 [0.0212, 0.0550]
+ 20 |          267     266  0.996 [0.979, 0.999] |          324       4  0.0123 [0.0048, 0.0313]
+ 30 |          267     266  0.996 [0.979, 0.999] |          205       3  0.0146 [0.0050, 0.0421]
+
+attack age at first flag: median 0.70 s, p90 1.13 s  (n = 266 flagged of 267)
+attack flows never flagged: 1
+benign observed lifetime (s): median 7.5, p90 33.7, max 99.4
