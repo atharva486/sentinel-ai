@@ -1,0 +1,81 @@
+=== Deterministic live-path replay (simulated clock) ===
+pcap:        /home/atharva/sentinel_archive/run_1794081957/client_only.pcap
+side log:    /home/atharva/sentinel_archive/run_1794081957/side_log.jsonl
+model:       /home/atharva/l7-dos-defender/models/sentinel_v2_13feat.joblib
+threshold:   0.3
+
+model feature_order (13): ['bytes_in', 'bytes_in_per_s', 'requests_per_s', 'packets_per_s', 'interarrival_mean', 'interarrival_std', 'interarrival_max', 'requests_per_conn_so_far', 'stall_time_s', 'body_frac_sent', 'bytes_declared', 'body_drip_rate_bps', 'header_complete']
+side-log rows: 1831
+capture duration: 247.388 s  (first_ts=1794081961.848733, last_ts=1794082209.237135)
+total scoring cycles: 1794082209
+total decisions recorded: 49570
+
+=== Join and coverage ===
+flows seen:              1863
+labelled flows:          411
+unlabelled flows:        1452
+coverage (labelled/seen): 411/1863 = 22.06%
+coverage (labelled/side-log rows): 411/1831 = 22.45%
+unlabelled packets:      5630025 / 6506320 = 86.53% of client->proxy packets
+
+=== Evaluation metrics (unique labelled flows) ===
+--- aggregate (n=411) ---
+  TP=266 FN=1 FP=7 TN=137
+  recall=0.9963  fpr=0.04861
+  recall 95% CI: [0.9791, 0.9993]
+  fpr    95% CI: [0.02374, 0.09694]
+--- attack (n=267) ---
+  TP=266 FN=1 FP=0 TN=0
+  recall=0.9963  fpr=0.00000
+  recall 95% CI: [0.9791, 0.9993]
+  fpr    95% CI: [nan, nan]
+--- benign (n=144) ---
+  TP=0 FN=0 FP=7 TN=137
+  recall=0.0000  fpr=0.04861
+  recall 95% CI: [nan, nan]
+  fpr    95% CI: [0.02374, 0.09694]
+
+--- by attack_type ---
+--- attack_type=flood (n=27) ---
+  TP=27 FN=0 FP=0 TN=0
+  recall=1.0000  fpr=0.00000
+  recall 95% CI: [0.8754, 1.0000]
+  fpr    95% CI: [nan, nan]
+--- attack_type=slowloris (n=240) ---
+  TP=239 FN=1 FP=0 TN=0
+  recall=0.9958  fpr=0.00000
+  recall 95% CI: [0.9768, 0.9993]
+  fpr    95% CI: [nan, nan]
+
+--- by benign sub_type ---
+--- sub_type=normal (n=144) ---
+  TP=0 FN=0 FP=7 TN=137
+  recall=0.0000  fpr=0.04861
+  recall 95% CI: [nan, nan]
+  fpr    95% CI: [0.02374, 0.09694]
+
+=== Detection-time analysis ===
+t   attack_flows>=t  attack_frac_flagged<=t  benign_flows>=t  benign_frac_flagged<=t
+1    267                 0.7678                         129                0.0078
+2    267                 0.9963                         103                0.0194
+3    267                 0.9963                         72                 0.0694
+5    267                 0.9963                         35                 0.0857
+10   267                 0.9963                         28                 0.0714
+20   267                 0.9963                         14                 0.0000
+30   267                 0.9963                         7                  0.0000
+attack flows flagged: 266 / 267
+median age at first flag (attack): 0.702 s
+p90    age at first flag (attack): 1.127 s
+
+saved 49570 decisions -> results/replay_eval/decisions.parquet
+
+=== Parity check (20 random flows, ages 1s/5s/final) ===
+parity points checked: 60  (20 flows x 3 ages)
+maximum absolute feature difference: 0.000e+00
+
+=== Acceptance criteria ===
+PASS: every flow older than 2s has >= 2 decisions
+PASS: coverage printed both ways (labelled/seen and labelled/side-log rows)
+PASS: parity maximum difference printed (0.000e+00)
+PASS: total execution time = 1441.46 s
+
