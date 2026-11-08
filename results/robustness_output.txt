@@ -1,0 +1,132 @@
+flows: 4799  | test = runK+runL, train = runH, validation = runI
+
+==== A. threshold chosen on VALIDATION (runI, as_of = 1) for an FPR budget
+validation benign flows at 1 s: 504
+
+-- budget 0.5%: threshold 0.1020 (flag if score > threshold)
+as_of attack  caught recall   benign   FP  FPR [95% CI]
+     1    455   450 0.989     1376   18 0.0131 [0.0083, 0.0206]
+     2    455   450 0.989      984   15 0.0152 [0.0093, 0.0250]
+     5    452   450 0.996      621    8 0.0129 [0.0065, 0.0252]
+    10    326   324 0.994      594    7 0.0118 [0.0057, 0.0241]
+    20    152   150 0.987      592    7 0.0118 [0.0057, 0.0242]
+ final    457   450 0.985     1992   41 0.0206 [0.0152, 0.0278]
+
+-- budget 0.2%: threshold 0.1608 (flag if score > threshold)
+as_of attack  caught recall   benign   FP  FPR [95% CI]
+     1    455   450 0.989     1376   13 0.0094 [0.0055, 0.0161]
+     2    455   450 0.989      984   12 0.0122 [0.0070, 0.0212]
+     5    452   450 0.996      621    5 0.0081 [0.0034, 0.0187]
+    10    326   324 0.994      594    5 0.0084 [0.0036, 0.0196]
+    20    152   150 0.987      592    6 0.0101 [0.0047, 0.0219]
+ final    457   450 0.985     1992   27 0.0136 [0.0093, 0.0196]
+
+-- reference: fixed 0.30
+as_of attack  caught recall   benign   FP  FPR [95% CI]
+     1    455   450 0.989     1376    7 0.0051 [0.0025, 0.0105]
+     2    455   450 0.989      984    6 0.0061 [0.0028, 0.0132]
+     5    452   450 0.996      621    3 0.0048 [0.0016, 0.0141]
+    10    326   324 0.994      594    2 0.0034 [0.0009, 0.0122]
+    20    152   149 0.980      592    0 0.0000 [0.0000, 0.0064]
+ final    457   450 0.985     1992   17 0.0085 [0.0053, 0.0136]
+
+==== B. leave-one-attack-BEHAVIOUR-out (heuristic groups from final-flow features)
+train: runH benign + attacks NOT in the held-out group; test: runK+runL, threshold 0.30
+
+-- held out: slowloris-like (train attack flows left: 303)
+as_of  unseen_n unseen_recall | seen_n seen_recall | benign FP / n
+    1       100         0.000 |    355       0.986 | 0 / 1376
+    5       100         0.990 |    352       0.994 | 2 / 621
+final       100         0.280 |    357       0.978 | 5 / 1992
+
+-- held out: flood-like (train attack flows left: 303)
+as_of  unseen_n unseen_recall | seen_n seen_recall | benign FP / n
+    1       150         0.000 |    305       0.984 | 3 / 1376
+    5       150         0.000 |    302       0.993 | 2 / 621
+final       150         0.000 |    307       0.977 | 13 / 1992
+
+-- held out: slow-POST-like (train attack flows left: 258)
+as_of  unseen_n unseen_recall | seen_n seen_recall | benign FP / n
+    1       159         0.428 |    296       0.990 | 12 / 1376
+    5       159         0.491 |    293       1.000 | 2 / 621
+final       159         0.415 |    298       0.983 | 25 / 1992
+
+==== C. leave-one-SESSION-out (runJ is benign-only and is always in training)
+fold  as_of attack caught recall  benign FP  FPR
+ runH      1    402   400 0.995     274   0 0.0000
+ runH      5    397   396 0.997     145   0 0.0000
+ runH  final    403   397 0.985     445   0 0.0000
+ runI      1    202   200 0.990     504   0 0.0000
+ runI      5    199   199 1.000     187   0 0.0000
+ runI  final    202   199 0.985     746   3 0.0040
+ runK      1    403   400 0.993     602   0 0.0000
+ runK      5    401   400 0.998     286   0 0.0000
+ runK  final    403   399 0.990     875   1 0.0011
+ runL      1     52    50 0.962     774   2 0.0026
+ runL      5     51    50 0.980     335   0 0.0000
+ runL  final     54    50 0.926    1117   0 0.0000
+
+mean (min-max) over the 4 folds:
+  as_of     1: recall 0.985 (0.962-0.995)   FPR 0.0006 (0.0000-0.0026)
+  as_of     5: recall 0.994 (0.980-1.000)   FPR 0.0000 (0.0000-0.0000)
+  as_of final: recall 0.972 (0.926-0.990)   FPR 0.0013 (0.0000-0.0040)
+
+pooled over the 4 folds (each flow counted once per as_of):
+  as_of     1: recall 1050/1059 = 0.9915 [0.9839, 0.9955]   FP 2/2154 = 0.0009 [0.0003, 0.0034]
+  as_of     5: recall 1045/1048 = 0.9971 [0.9916, 0.9990]   FP 0/953 = 0.0000 [-0.0000, 0.0040]
+  as_of final: recall 1045/1062 = 0.9840 [0.9745, 0.9900]   FP 4/3183 = 0.0013 [0.0005, 0.0032]
+
+==== D. seed stability (train runH, test runK+runL, threshold 0.30)
+seed  as_of=1: recall  FP/benign | as_of=5: recall  FP/benign
+   0  0.989  7/1376  |  0.996  3/621
+   1  0.989  4/1376  |  0.996  4/621
+   2  0.989  11/1376  |  0.996  3/621
+   3  0.989  9/1376  |  0.996  2/621
+   4  0.989  5/1376  |  0.996  2/621
+as_of=1 recall 0.989 (min 0.989, max 0.989); FP 7.2 (min 4, max 11)
+
+==== E. idealised static baseline vs the model (test = runK+runL)
+APPROXIMATION from per-flow features, NOT nginx. 'timeout T': header or body incomplete AND
+largest packet gap so far >= T s.  'rate R': requests_per_s >= R.  Benign data has no slow
+legitimate header senders, so timeout false positives are understated.
+
+-- timeout T=5s + rate R=20/s
+as_of attack  caught recall   benign   FP  FPR [95% CI]
+     1    455   150 0.330     1376    0 0.0000 [0.0000, 0.0028]
+     2    455   150 0.330      984    0 0.0000 [0.0000, 0.0039]
+     5    452   150 0.332      621    0 0.0000 [-0.0000, 0.0061]
+    10    326   124 0.380      594    2 0.0034 [0.0009, 0.0122]
+
+-- timeout T=10s + rate R=20/s
+as_of attack  caught recall   benign   FP  FPR [95% CI]
+     1    455   150 0.330     1376    0 0.0000 [0.0000, 0.0028]
+     2    455   150 0.330      984    0 0.0000 [0.0000, 0.0039]
+     5    452   150 0.332      621    0 0.0000 [-0.0000, 0.0061]
+    10    326   115 0.353      594    0 0.0000 [0.0000, 0.0064]
+
+-- timeout T=30s + rate R=20/s
+as_of attack  caught recall   benign   FP  FPR [95% CI]
+     1    455   150 0.330     1376    0 0.0000 [0.0000, 0.0028]
+     2    455   150 0.330      984    0 0.0000 [0.0000, 0.0039]
+     5    452   150 0.332      621    0 0.0000 [-0.0000, 0.0061]
+    10    326   115 0.353      594    0 0.0000 [0.0000, 0.0064]
+
+(the 'final' snapshot is left out of E: benign flows that live under 50 ms get requests_per_s > 20 there)
+
+-- model, fixed 0.30 (same flows)
+as_of attack  caught recall   benign   FP  FPR [95% CI]
+     1    455   450 0.989     1376    7 0.0051 [0.0025, 0.0105]
+     2    455   450 0.989      984    6 0.0061 [0.0028, 0.0132]
+     5    452   450 0.996      621    3 0.0048 [0.0016, 0.0141]
+    10    326   324 0.994      594    2 0.0034 [0.0009, 0.0122]
+
+largest packet gap (s) per attack flow at final, by behaviour (an idle-gap timeout can only fire above its gap):
+                count   min   25%   50%   75%    max
+kind                                                
+flood-like      300.0  0.06  0.21  1.61  5.05  14.34
+other           133.0  0.48  3.02  3.96  6.04  23.16
+slow-POST-like  379.0  0.44  1.95  4.38  8.74  31.79
+slowloris-like  250.0  0.84  1.99  3.44  8.64  31.16
+   as_of 5, slowloris-like : static (T=10,R=20) catches 0.000, model catches 1.000  (n=100)
+   as_of 5, flood-like     : static (T=10,R=20) catches 1.000, model catches 1.000  (n=150)
+   as_of 5, slow-POST-like : static (T=10,R=20) catches 0.000, model catches 0.987  (n=159)
