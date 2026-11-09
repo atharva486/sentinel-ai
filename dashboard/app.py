@@ -285,10 +285,10 @@ with tab_results:
     tp_r, tn_r, fp_r, fn_r = _confusion(raw_v)
     tp_c, tn_c, fp_c, fn_c = _confusion(cal_v)
 
-    m = st.columns(3)
-    m[0].metric("PR-AUC (calibrated)", f"{pr_c:.4f}")
-    m[1].metric("ROC-AUC (calibrated)", f"{roc_c:.4f}")
-    m[2].metric("ECE (calibrated)", f"{ece_c:.4f}")
+    st.caption(
+        "Legacy lab data. See results/binary_study/verified_output.txt "
+        "for the verified evaluation."
+    )
 
     met = pd.DataFrame(
         {

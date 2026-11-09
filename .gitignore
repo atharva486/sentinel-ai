@@ -49,3 +49,5 @@ data/features_run?.parquet
 data/*_filtered.parquet
 data/features_run?.parquet
 reports/runs/
+*.bak
+*.bak
